@@ -9,13 +9,31 @@
     ".": {
       "types": "./dist/src/index.d.ts",
       "default": "./dist/src/index.js"
+    },
+    "./dom": {
+      "types": "./dist/src/dom.d.ts",
+      "default": "./dist/src/dom.js"
+    },
+    "./svelte": {
+      "types": "./src/TerminalView.svelte",
+      "svelte": "./src/TerminalView.svelte",
+      "default": "./src/TerminalView.svelte"
     }
   },
   "files": [
     "dist/src",
+    "src/TerminalView.svelte",
     "README.md",
     "LICENSE"
   ],
+  "peerDependencies": {
+    "svelte": "^5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "svelte": {
+      "optional": true
+    }
+  },
   "scripts": {
     "build": "tsc",
     "test": "node --test dist/test/*.test.js",

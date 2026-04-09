@@ -8,6 +8,7 @@
     "declaration": true,
     "strict": true,
     "esModuleInterop": true,
+    "lib": ["ES2022", "DOM"],
     "types": ["node"],
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
