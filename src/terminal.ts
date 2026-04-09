@@ -148,7 +148,28 @@ export class Terminal {
     private scrollTop = 0
     private scrollBottom: number
 
+    // Alternate screen buffer
+    private altGrid: Grid | null = null
+    private isAltScreen = false
+
+    // Private modes
+    private _autoWrap = true
+    private _applicationCursor = false
+    private _bracketedPaste = false
+    private _sgrMouse = false
+    private _mouseTracking: 'none' | 'x10' | 'normal' | 'button' | 'any' = 'none'
+
+    get mouseMode(): string { return this._mouseTracking }
+    get sgrMouse(): boolean { return this._sgrMouse }
+    get bracketedPaste(): boolean { return this._bracketedPaste }
+    get applicationCursor(): boolean { return this._applicationCursor }
+    get autoWrap(): boolean { return this._autoWrap }
+
     private handleCsi(params: number[], intermediates: string, final: string): void {
+        if (intermediates === '?') {
+            this.handlePrivateMode(params, final)
+            return
+        }
         if (intermediates !== '') return
 
         const p0 = params[0] ?? 0
@@ -313,6 +334,78 @@ export class Terminal {
 
     private eraseCharacters(count: number): void {
         this.grid.clearRange(this._cursor.row, this._cursor.col, this._cursor.col + count)
+    }
+
+    private handlePrivateMode(params: number[], final: string): void {
+        const set = final === 'h'
+        const reset = final === 'l'
+        if (!set && !reset) return
+
+        for (const p of params) {
+            switch (p) {
+                case 1: // DECCKM — application cursor keys
+                    this._applicationCursor = set
+                    break
+                case 7: // DECAWM — auto-wrap
+                    this._autoWrap = set
+                    break
+                case 25: // DECTCEM — cursor visibility
+                    this._cursor.visible = set
+                    break
+                case 9: // X10 mouse
+                    this._mouseTracking = set ? 'x10' : 'none'
+                    break
+                case 1000: // Normal mouse tracking
+                    if (set) this._mouseTracking = 'normal'
+                    else if (this._mouseTracking === 'normal') this._mouseTracking = 'none'
+                    break
+                case 1002: // Button-event tracking
+                    if (set) this._mouseTracking = 'button'
+                    else if (this._mouseTracking === 'button') this._mouseTracking = 'normal'
+                    break
+                case 1003: // Any-event tracking
+                    if (set) this._mouseTracking = 'any'
+                    else if (this._mouseTracking === 'any') {
+                        // Fall back to whatever was set before
+                        this._mouseTracking = 'normal'
+                    }
+                    break
+                case 1006: // SGR mouse mode
+                    this._sgrMouse = set
+                    break
+                case 1049: // Alternate screen buffer
+                    if (set) this.enterAltScreen()
+                    else this.leaveAltScreen()
+                    break
+                case 2004: // Bracketed paste
+                    this._bracketedPaste = set
+                    break
+                case 2026: // Synchronized output — track but no-op
+                    break
+            }
+        }
+    }
+
+    private enterAltScreen(): void {
+        if (this.isAltScreen) return
+        // Save primary grid, create fresh alt grid
+        this.altGrid = this.grid
+        this.grid = new Grid(this.cols, this.rows)
+        this.isAltScreen = true
+        this.savedCursor = { col: this._cursor.col, row: this._cursor.row }
+        this._cursor.col = 0
+        this._cursor.row = 0
+        this.wrapNext = false
+    }
+
+    private leaveAltScreen(): void {
+        if (!this.isAltScreen || !this.altGrid) return
+        this.grid = this.altGrid
+        this.altGrid = null
+        this.isAltScreen = false
+        this._cursor.col = this.savedCursor.col
+        this._cursor.row = this.savedCursor.row
+        this.wrapNext = false
     }
 
     private handleSgr(params: number[]): void {
