@@ -140,9 +140,91 @@ export class Terminal {
         }
     }
 
-    // Placeholder for CSI, ESC, OSC — will be filled in slices 3-7
     private handleCsi(params: number[], intermediates: string, final: string): void {
-        // Will be implemented in later slices
+        if (intermediates === '') {
+            switch (final) {
+                case 'm':
+                    this.handleSgr(params)
+                    break
+            }
+        }
+    }
+
+    private handleSgr(params: number[]): void {
+        if (params.length === 0) params = [0]
+
+        for (let i = 0; i < params.length; i++) {
+            const p = params[i]
+            switch (p) {
+                case 0:
+                    this.curAttrs = Attr.None
+                    this.curFg = DEFAULT_COLOR
+                    this.curBg = DEFAULT_COLOR
+                    this.curHyperlink = undefined
+                    break
+                case 1: this.curAttrs |= Attr.Bold; break
+                case 2: this.curAttrs |= Attr.Dim; break
+                case 3: this.curAttrs |= Attr.Italic; break
+                case 4: this.curAttrs |= Attr.Underline; break
+                case 5: this.curAttrs |= Attr.Blink; break
+                case 7: this.curAttrs |= Attr.Inverse; break
+                case 8: this.curAttrs |= Attr.Invisible; break
+                case 9: this.curAttrs |= Attr.Strikethrough; break
+                case 22: this.curAttrs &= ~(Attr.Bold | Attr.Dim); break
+                case 23: this.curAttrs &= ~Attr.Italic; break
+                case 24: this.curAttrs &= ~Attr.Underline; break
+                case 25: this.curAttrs &= ~Attr.Blink; break
+                case 27: this.curAttrs &= ~Attr.Inverse; break
+                case 28: this.curAttrs &= ~Attr.Invisible; break
+                case 29: this.curAttrs &= ~Attr.Strikethrough; break
+                // Foreground colors (ANSI 8)
+                case 30: case 31: case 32: case 33:
+                case 34: case 35: case 36: case 37:
+                    this.curFg = { type: 'indexed', index: p - 30 }
+                    break
+                case 39: this.curFg = DEFAULT_COLOR; break
+                // Background colors (ANSI 8)
+                case 40: case 41: case 42: case 43:
+                case 44: case 45: case 46: case 47:
+                    this.curBg = { type: 'indexed', index: p - 40 }
+                    break
+                case 49: this.curBg = DEFAULT_COLOR; break
+                // Bright foreground (ANSI 16)
+                case 90: case 91: case 92: case 93:
+                case 94: case 95: case 96: case 97:
+                    this.curFg = { type: 'indexed', index: p - 90 + 8 }
+                    break
+                // Bright background (ANSI 16)
+                case 100: case 101: case 102: case 103:
+                case 104: case 105: case 106: case 107:
+                    this.curBg = { type: 'indexed', index: p - 100 + 8 }
+                    break
+                // Extended color: 256-color and truecolor
+                case 38:
+                    i = this.parseExtendedColor(params, i, true)
+                    break
+                case 48:
+                    i = this.parseExtendedColor(params, i, false)
+                    break
+            }
+        }
+    }
+
+    private parseExtendedColor(params: number[], i: number, isFg: boolean): number {
+        if (i + 1 >= params.length) return i
+        const mode = params[i + 1]
+        if (mode === 5 && i + 2 < params.length) {
+            // 256-color: 38;5;n or 48;5;n
+            const color: Color = { type: 'indexed', index: params[i + 2] }
+            if (isFg) this.curFg = color; else this.curBg = color
+            return i + 2
+        } else if (mode === 2 && i + 4 < params.length) {
+            // Truecolor: 38;2;r;g;b or 48;2;r;g;b
+            const color: Color = { type: 'rgb', r: params[i + 2], g: params[i + 3], b: params[i + 4] }
+            if (isFg) this.curFg = color; else this.curBg = color
+            return i + 4
+        }
+        return i
     }
 
     private handleEsc(intermediates: string, final: string): void {
