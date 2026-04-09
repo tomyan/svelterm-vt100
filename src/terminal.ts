@@ -34,6 +34,7 @@ export class Terminal {
         for (let i = 8; i < cols; i += 8) {
             this.tabStops.add(i)
         }
+        this.scrollBottom = rows - 1
         this.parser = new Parser((event) => this.handleEvent(event))
     }
 
@@ -122,10 +123,10 @@ export class Terminal {
 
     private linefeed(): void {
         this.wrapNext = false
-        if (this._cursor.row < this.rows - 1) {
+        if (this._cursor.row === this.scrollBottom) {
+            this.grid.scrollUp(this.scrollTop, this.scrollBottom, 1)
+        } else if (this._cursor.row < this.rows - 1) {
             this._cursor.row++
-        } else {
-            this.grid.scrollUp(0, this.rows - 1, 1)
         }
     }
 
@@ -142,6 +143,10 @@ export class Terminal {
 
     // Saved cursor state (DECSC/DECRC)
     private savedCursor: { col: number; row: number } = { col: 0, row: 0 }
+
+    // Scroll region (DECSTBM) — 0-based, inclusive
+    private scrollTop = 0
+    private scrollBottom: number
 
     private handleCsi(params: number[], intermediates: string, final: string): void {
         if (intermediates !== '') return
@@ -194,7 +199,79 @@ export class Terminal {
             case 'X': // ECH — erase characters
                 this.eraseCharacters(Math.max(1, p0))
                 break
+            // Insert/delete
+            case 'L': // IL — insert lines
+                this.insertLines(Math.max(1, p0))
+                break
+            case 'M': // DL — delete lines
+                this.deleteLines(Math.max(1, p0))
+                break
+            case '@': // ICH — insert characters
+                this.insertCharacters(Math.max(1, p0))
+                break
+            case 'P': // DCH — delete characters
+                this.deleteCharacters(Math.max(1, p0))
+                break
+            // Scroll
+            case 'S': // SU — scroll up
+                this.grid.scrollUp(this.scrollTop, this.scrollBottom, Math.max(1, p0))
+                break
+            case 'T': // SD — scroll down
+                this.grid.scrollDown(this.scrollTop, this.scrollBottom, Math.max(1, p0))
+                break
+            // Scroll region
+            case 'r': // DECSTBM — set top and bottom margins
+                this.scrollTop = Math.max(0, (p0 || 1) - 1)
+                this.scrollBottom = Math.min(this.rows - 1, (p1 || this.rows) - 1)
+                this._cursor.col = 0
+                this._cursor.row = 0
+                this.wrapNext = false
+                break
         }
+    }
+
+    private insertLines(count: number): void {
+        const bottom = this.scrollBottom
+        for (let i = 0; i < count; i++) {
+            this.grid.scrollDown(this._cursor.row, bottom, 1)
+        }
+    }
+
+    private deleteLines(count: number): void {
+        const bottom = this.scrollBottom
+        for (let i = 0; i < count; i++) {
+            this.grid.scrollUp(this._cursor.row, bottom, 1)
+        }
+    }
+
+    private insertCharacters(count: number): void {
+        const row = this._cursor.row
+        const col = this._cursor.col
+        // Shift characters right, filling with blanks
+        for (let c = this.cols - 1; c >= col + count; c--) {
+            const src = this.grid.getCell(c - count, row)
+            this.grid.setCell(c, row, {
+                char: src.char, width: src.width,
+                fg: src.fg, bg: src.bg, attrs: src.attrs,
+                hyperlink: src.hyperlink,
+            })
+        }
+        this.grid.clearRange(row, col, Math.min(col + count, this.cols))
+    }
+
+    private deleteCharacters(count: number): void {
+        const row = this._cursor.row
+        const col = this._cursor.col
+        // Shift characters left, filling end with blanks
+        for (let c = col; c < this.cols - count; c++) {
+            const src = this.grid.getCell(c + count, row)
+            this.grid.setCell(c, row, {
+                char: src.char, width: src.width,
+                fg: src.fg, bg: src.bg, attrs: src.attrs,
+                hyperlink: src.hyperlink,
+            })
+        }
+        this.grid.clearRange(row, Math.max(col, this.cols - count), this.cols)
     }
 
     private eraseDisplay(mode: number): void {
@@ -327,10 +404,10 @@ export class Terminal {
                     this.wrapNext = false
                     break
                 case 'M': // RI — reverse index
-                    if (this._cursor.row > 0) {
+                    if (this._cursor.row === this.scrollTop) {
+                        this.grid.scrollDown(this.scrollTop, this.scrollBottom, 1)
+                    } else if (this._cursor.row > 0) {
                         this._cursor.row--
-                    } else {
-                        this.grid.scrollDown(0, this.rows - 1, 1)
                     }
                     break
             }
