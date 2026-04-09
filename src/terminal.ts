@@ -25,6 +25,13 @@ export class Terminal {
     // Tab stops (default every 8 columns)
     private tabStops: Set<number>
 
+    // Character set (G0)
+    private useSpecialGraphics = false
+
+    // Callbacks
+    onTitleChange?: (title: string) => void
+    onBell?: () => void
+
     constructor(cols: number, rows: number) {
         this.cols = cols
         this.rows = rows
@@ -76,13 +83,17 @@ export class Terminal {
 
     private print(char: string): void {
         if (this.wrapNext) {
-            this._cursor.col = 0
-            this.linefeed()
+            if (this._autoWrap) {
+                this._cursor.col = 0
+                this.linefeed()
+            }
             this.wrapNext = false
         }
 
+        const displayChar = this.useSpecialGraphics ? (DEC_SPECIAL_GRAPHICS[char] ?? char) : char
+
         this.grid.setCell(this._cursor.col, this._cursor.row, {
-            char,
+            char: displayChar,
             width: 1,
             fg: this.curFg,
             bg: this.curBg,
@@ -101,6 +112,7 @@ export class Terminal {
     private execute(code: number): void {
         switch (code) {
             case 0x07: // BEL
+                this.onBell?.()
                 break
             case 0x08: // BS
                 if (this._cursor.col > 0) this._cursor.col--
@@ -239,6 +251,11 @@ export class Terminal {
                 break
             case 'T': // SD — scroll down
                 this.grid.scrollDown(this.scrollTop, this.scrollBottom, Math.max(1, p0))
+                break
+            // Tab control
+            case 'g': // TBC — tab clear
+                if (p0 === 0) this.tabStops.delete(this._cursor.col)
+                else if (p0 === 3) this.tabStops.clear()
                 break
             // Scroll region
             case 'r': // DECSTBM — set top and bottom margins
@@ -503,11 +520,44 @@ export class Terminal {
                         this._cursor.row--
                     }
                     break
+                case 'H': // HTS — set tab stop
+                    this.tabStops.add(this._cursor.col)
+                    break
             }
+        } else if (intermediates === '(') {
+            // SCS — select character set G0
+            this.useSpecialGraphics = final === '0'
         }
     }
 
     private handleOsc(data: string): void {
-        // Will be implemented in later slices
+        const semicolonIdx = data.indexOf(';')
+        if (semicolonIdx === -1) return
+        const code = data.substring(0, semicolonIdx)
+        const value = data.substring(semicolonIdx + 1)
+
+        switch (code) {
+            case '0': // Set icon name and window title
+            case '2': // Set window title
+                this.onTitleChange?.(value)
+                break
+            case '8': // Hyperlink
+                // Format: 8;params;uri — empty uri closes
+                {
+                    const nextSemicolon = value.indexOf(';')
+                    const uri = nextSemicolon === -1 ? value : value.substring(nextSemicolon + 1)
+                    this.curHyperlink = uri || undefined
+                }
+                break
+        }
     }
+}
+
+/** DEC Special Graphics character set mapping */
+const DEC_SPECIAL_GRAPHICS: Record<string, string> = {
+    '`': '◆', 'a': '▒', 'f': '°', 'g': '±', 'j': '┘',
+    'k': '┐', 'l': '┌', 'm': '└', 'n': '┼', 'o': '⎺',
+    'p': '⎻', 'q': '─', 'r': '⎼', 's': '⎽', 't': '├',
+    'u': '┤', 'v': '┴', 'w': '┬', 'x': '│', 'y': '≤',
+    'z': '≥', '{': 'π', '|': '≠', '}': '£', '~': '·',
 }
