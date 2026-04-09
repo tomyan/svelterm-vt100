@@ -9,9 +9,10 @@ export interface Cursor {
 }
 
 export class Terminal {
-    readonly cols: number
-    readonly rows: number
+    cols: number
+    rows: number
     private grid: Grid
+    private dirtyRows: Set<number>
     private parser: Parser
     private _cursor: Cursor
     private wrapNext = false
@@ -42,6 +43,8 @@ export class Terminal {
             this.tabStops.add(i)
         }
         this.scrollBottom = rows - 1
+        this.dirtyRows = new Set()
+        for (let r = 0; r < rows; r++) this.dirtyRows.add(r)
         this.parser = new Parser((event) => this.handleEvent(event))
     }
 
@@ -59,6 +62,35 @@ export class Terminal {
 
     getRowText(row: number): string {
         return this.grid.getRowText(row)
+    }
+
+    getDirtyRows(): Set<number> {
+        return new Set(this.dirtyRows)
+    }
+
+    clearDirty(): void {
+        this.dirtyRows.clear()
+    }
+
+    resize(newCols: number, newRows: number): void {
+        this.grid = this.grid.resize(newCols, newRows)
+        this.cols = newCols
+        this.rows = newRows
+        this.scrollTop = 0
+        this.scrollBottom = newRows - 1
+        this._cursor.col = Math.min(this._cursor.col, newCols - 1)
+        this._cursor.row = Math.min(this._cursor.row, newRows - 1)
+        this.wrapNext = false
+        this.dirtyRows.clear()
+        for (let r = 0; r < newRows; r++) this.dirtyRows.add(r)
+    }
+
+    private markDirty(row: number): void {
+        this.dirtyRows.add(row)
+    }
+
+    private markAllDirty(): void {
+        for (let r = 0; r < this.rows; r++) this.dirtyRows.add(r)
     }
 
     private handleEvent(event: ParserEvent): void {
@@ -100,6 +132,7 @@ export class Terminal {
             attrs: this.curAttrs,
             hyperlink: this.curHyperlink,
         })
+        this.markDirty(this._cursor.row)
 
         if (this._cursor.col < this.cols - 1) {
             this._cursor.col++
@@ -137,6 +170,7 @@ export class Terminal {
         this.wrapNext = false
         if (this._cursor.row === this.scrollBottom) {
             this.grid.scrollUp(this.scrollTop, this.scrollBottom, 1)
+            for (let r = this.scrollTop; r <= this.scrollBottom; r++) this.markDirty(r)
         } else if (this._cursor.row < this.rows - 1) {
             this._cursor.row++
         }
@@ -316,21 +350,26 @@ export class Terminal {
         switch (mode) {
             case 0: // cursor to end
                 this.grid.clearRange(this._cursor.row, this._cursor.col, this.cols)
+                this.markDirty(this._cursor.row)
                 for (let r = this._cursor.row + 1; r < this.rows; r++) {
                     this.grid.clearRow(r)
+                    this.markDirty(r)
                 }
                 break
             case 1: // start to cursor
                 for (let r = 0; r < this._cursor.row; r++) {
                     this.grid.clearRow(r)
+                    this.markDirty(r)
                 }
                 this.grid.clearRange(this._cursor.row, 0, this._cursor.col + 1)
+                this.markDirty(this._cursor.row)
                 break
             case 2: // entire display
             case 3: // entire display + scrollback
                 for (let r = 0; r < this.rows; r++) {
                     this.grid.clearRow(r)
                 }
+                this.markAllDirty()
                 break
         }
     }
@@ -347,10 +386,12 @@ export class Terminal {
                 this.grid.clearRow(this._cursor.row)
                 break
         }
+        this.markDirty(this._cursor.row)
     }
 
     private eraseCharacters(count: number): void {
         this.grid.clearRange(this._cursor.row, this._cursor.col, this._cursor.col + count)
+        this.markDirty(this._cursor.row)
     }
 
     private handlePrivateMode(params: number[], final: string): void {

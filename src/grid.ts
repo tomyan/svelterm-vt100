@@ -54,6 +54,23 @@ export class Grid {
         }
     }
 
+    resize(newCols: number, newRows: number): Grid {
+        const grid = new Grid(newCols, newRows)
+        const copyRows = Math.min(this.rows, newRows)
+        const copyCols = Math.min(this.cols, newCols)
+        for (let r = 0; r < copyRows; r++) {
+            for (let c = 0; c < copyCols; c++) {
+                const src = this.cells[r][c]
+                grid.setCell(c, r, {
+                    char: src.char, width: src.width,
+                    fg: src.fg, bg: src.bg, attrs: src.attrs,
+                    hyperlink: src.hyperlink,
+                })
+            }
+        }
+        return grid
+    }
+
     getRowText(row: number): string {
         return this.cells[row].map(c => c.char).join('')
     }
