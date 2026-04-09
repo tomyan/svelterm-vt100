@@ -140,14 +140,102 @@ export class Terminal {
         }
     }
 
+    // Saved cursor state (DECSC/DECRC)
+    private savedCursor: { col: number; row: number } = { col: 0, row: 0 }
+
     private handleCsi(params: number[], intermediates: string, final: string): void {
-        if (intermediates === '') {
-            switch (final) {
-                case 'm':
-                    this.handleSgr(params)
-                    break
-            }
+        if (intermediates !== '') return
+
+        const p0 = params[0] ?? 0
+        const p1 = params[1] ?? 0
+
+        switch (final) {
+            case 'm':
+                this.handleSgr(params)
+                break
+            // Cursor movement
+            case 'A': // CUU — cursor up
+                this._cursor.row = Math.max(0, this._cursor.row - Math.max(1, p0))
+                this.wrapNext = false
+                break
+            case 'B': // CUD — cursor down
+                this._cursor.row = Math.min(this.rows - 1, this._cursor.row + Math.max(1, p0))
+                this.wrapNext = false
+                break
+            case 'C': // CUF — cursor forward
+                this._cursor.col = Math.min(this.cols - 1, this._cursor.col + Math.max(1, p0))
+                this.wrapNext = false
+                break
+            case 'D': // CUB — cursor back
+                this._cursor.col = Math.max(0, this._cursor.col - Math.max(1, p0))
+                this.wrapNext = false
+                break
+            case 'H': // CUP — cursor position
+            case 'f': // HVP — same as CUP
+                this._cursor.row = Math.min(this.rows - 1, Math.max(0, (p0 || 1) - 1))
+                this._cursor.col = Math.min(this.cols - 1, Math.max(0, (p1 || 1) - 1))
+                this.wrapNext = false
+                break
+            case 'G': // CHA — cursor horizontal absolute
+                this._cursor.col = Math.min(this.cols - 1, Math.max(0, (p0 || 1) - 1))
+                this.wrapNext = false
+                break
+            case 'd': // VPA — vertical position absolute
+                this._cursor.row = Math.min(this.rows - 1, Math.max(0, (p0 || 1) - 1))
+                this.wrapNext = false
+                break
+            // Erase
+            case 'J': // ED — erase display
+                this.eraseDisplay(p0)
+                break
+            case 'K': // EL — erase line
+                this.eraseLine(p0)
+                break
+            case 'X': // ECH — erase characters
+                this.eraseCharacters(Math.max(1, p0))
+                break
         }
+    }
+
+    private eraseDisplay(mode: number): void {
+        switch (mode) {
+            case 0: // cursor to end
+                this.grid.clearRange(this._cursor.row, this._cursor.col, this.cols)
+                for (let r = this._cursor.row + 1; r < this.rows; r++) {
+                    this.grid.clearRow(r)
+                }
+                break
+            case 1: // start to cursor
+                for (let r = 0; r < this._cursor.row; r++) {
+                    this.grid.clearRow(r)
+                }
+                this.grid.clearRange(this._cursor.row, 0, this._cursor.col + 1)
+                break
+            case 2: // entire display
+            case 3: // entire display + scrollback
+                for (let r = 0; r < this.rows; r++) {
+                    this.grid.clearRow(r)
+                }
+                break
+        }
+    }
+
+    private eraseLine(mode: number): void {
+        switch (mode) {
+            case 0: // cursor to end
+                this.grid.clearRange(this._cursor.row, this._cursor.col, this.cols)
+                break
+            case 1: // start to cursor
+                this.grid.clearRange(this._cursor.row, 0, this._cursor.col + 1)
+                break
+            case 2: // entire line
+                this.grid.clearRow(this._cursor.row)
+                break
+        }
+    }
+
+    private eraseCharacters(count: number): void {
+        this.grid.clearRange(this._cursor.row, this._cursor.col, this._cursor.col + count)
     }
 
     private handleSgr(params: number[]): void {
@@ -228,7 +316,25 @@ export class Terminal {
     }
 
     private handleEsc(intermediates: string, final: string): void {
-        // Will be implemented in later slices
+        if (intermediates === '') {
+            switch (final) {
+                case '7': // DECSC — save cursor
+                    this.savedCursor = { col: this._cursor.col, row: this._cursor.row }
+                    break
+                case '8': // DECRC — restore cursor
+                    this._cursor.col = this.savedCursor.col
+                    this._cursor.row = this.savedCursor.row
+                    this.wrapNext = false
+                    break
+                case 'M': // RI — reverse index
+                    if (this._cursor.row > 0) {
+                        this._cursor.row--
+                    } else {
+                        this.grid.scrollDown(0, this.rows - 1, 1)
+                    }
+                    break
+            }
+        }
     }
 
     private handleOsc(data: string): void {
