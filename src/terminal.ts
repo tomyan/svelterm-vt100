@@ -32,6 +32,10 @@ export class Terminal {
     // Callbacks
     onTitleChange?: (title: string) => void
     onBell?: () => void
+    onResponse?: (data: string) => void
+
+    // Terminal colors for OSC query responses
+    backgroundColor = '#0d1117'
 
     constructor(cols: number, rows: number) {
         this.cols = cols
@@ -590,8 +594,22 @@ export class Terminal {
                     this.curHyperlink = uri || undefined
                 }
                 break
+            case '11': // Query/set background color
+                if (value === '?' && this.onResponse) {
+                    const rgb = hexToOscRgb(this.backgroundColor)
+                    this.onResponse(`\x1b]11;rgb:${rgb}\x07`)
+                }
+                break
         }
     }
+}
+
+function hexToOscRgb(hex: string): string {
+    const h = hex.replace('#', '')
+    const r = h.substring(0, 2)
+    const g = h.substring(2, 4)
+    const b = h.substring(4, 6)
+    return `${r}${r}/${g}${g}/${b}${b}`
 }
 
 /** DEC Special Graphics character set mapping */
