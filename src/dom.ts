@@ -94,7 +94,7 @@ export class TerminalRenderer {
         style.fontFamily = this.options.fontFamily
         style.fontSize = `${this.options.fontSize}px`
         style.lineHeight = `${this.options.lineHeight}`
-        style.backgroundColor = this.options.background
+        style.backgroundColor = 'transparent'
         style.color = this.options.foreground
         style.whiteSpace = 'pre'
         style.overflow = 'hidden'
@@ -107,6 +107,7 @@ export class TerminalRenderer {
 
         for (let r = 0; r < this.terminal.rows; r++) {
             const rowEl = document.createElement('div')
+            rowEl.style.backgroundColor = this.options.background
             this.container.appendChild(rowEl)
             this.rowElements.push(rowEl)
         }
