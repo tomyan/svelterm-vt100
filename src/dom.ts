@@ -8,6 +8,7 @@
 import type { Terminal } from './terminal.js'
 import type { Cell, Color } from './cell.js'
 import { Attr } from './cell.js'
+import { BLOCKS_FONT_CSS } from './blocks-font.js'
 
 export interface TerminalRendererOptions {
     /** Font family for the terminal. Default: monospace */
@@ -23,11 +24,28 @@ export interface TerminalRendererOptions {
 }
 
 const DEFAULT_OPTIONS: Required<TerminalRendererOptions> = {
-    fontFamily: "'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace",
+    fontFamily: "'SveltermBlocks', 'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace",
     fontSize: 14,
     lineHeight: 1.2,
     foreground: '#cccccc',
     background: '#000000',
+}
+
+/**
+ * Install the @font-face declaration for SveltermBlocks exactly once per document.
+ * Block-element glyphs (U+2580–U+259F) are served from this font with metrics
+ * that fill the em box edge-to-edge; the browser falls back to the next font
+ * in the stack for every other codepoint.
+ */
+let fontInstalled: WeakSet<Document> | null = null
+function installBlocksFont(doc: Document): void {
+    if (!fontInstalled) fontInstalled = new WeakSet()
+    if (fontInstalled.has(doc)) return
+    const style = doc.createElement('style')
+    style.setAttribute('data-svelterm-blocks-font', '')
+    style.textContent = BLOCKS_FONT_CSS
+    doc.head.appendChild(style)
+    fontInstalled.add(doc)
 }
 
 export class TerminalRenderer {
@@ -42,6 +60,7 @@ export class TerminalRenderer {
         this.container = container
         this.terminal = terminal
         this.options = { ...DEFAULT_OPTIONS, ...options }
+        installBlocksFont(container.ownerDocument)
         this.setupContainer()
         this.createRows()
         this.renderAll()
