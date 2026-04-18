@@ -33,19 +33,54 @@ const DEFAULT_OPTIONS: Required<TerminalRendererOptions> = {
 
 /**
  * Install the @font-face declaration for SveltermBlocks exactly once per document.
- * Block-element glyphs (U+2580–U+259F) are served from this font with metrics
+ * Block-element and box-drawing glyphs are served from this font with metrics
  * that fill the em box edge-to-edge; the browser falls back to the next font
  * in the stack for every other codepoint.
+ *
+ * Measures the fallback font's character width and injects a `size-adjust`
+ * descriptor so our font's advance matches the fallback's exactly. Without
+ * this, mixing our glyphs with fallback-font glyphs drifts horizontally by
+ * the ratio mismatch, breaking cell alignment along a row.
  */
 let fontInstalled: WeakSet<Document> | null = null
-function installBlocksFont(doc: Document): void {
+function installBlocksFont(doc: Document, fallbackFontFamily: string): void {
     if (!fontInstalled) fontInstalled = new WeakSet()
     if (fontInstalled.has(doc)) return
+    const sizeAdjust = computeFontSizeAdjust(doc, fallbackFontFamily)
+    const css = BLOCKS_FONT_CSS.replace(
+        /font-display: block;/,
+        `font-display: block;\n    size-adjust: ${sizeAdjust}%;`,
+    )
     const style = doc.createElement('style')
     style.setAttribute('data-svelterm-blocks-font', '')
-    style.textContent = BLOCKS_FONT_CSS
+    style.textContent = css
     doc.head.appendChild(style)
     fontInstalled.add(doc)
+}
+
+/**
+ * Compute the size-adjust percentage that makes our font's advance match
+ * the fallback font's advance at the same CSS font-size.
+ *
+ * Our glyphs use advanceWidth = 600 within a 1000-unit em (ratio 0.6).
+ * If the fallback's advance ratio is R, setting size-adjust to (R / 0.6)
+ * scales our font so its rendered advance matches the fallback's.
+ */
+const OUR_ADVANCE_RATIO = 0.6  // matches ADVANCE/UNITS_PER_EM in build-blocks-font.mjs
+function computeFontSizeAdjust(doc: Document, fallbackFontFamily: string): number {
+    const REF_SIZE = 100
+    const span = doc.createElement('span')
+    span.style.fontFamily = fallbackFontFamily
+    span.style.fontSize = `${REF_SIZE}px`
+    span.style.position = 'absolute'
+    span.style.visibility = 'hidden'
+    span.style.whiteSpace = 'pre'
+    span.textContent = 'M'
+    doc.body.appendChild(span)
+    const fallbackAdvance = span.getBoundingClientRect().width
+    doc.body.removeChild(span)
+    const fallbackRatio = fallbackAdvance / REF_SIZE
+    return Math.round((fallbackRatio / OUR_ADVANCE_RATIO) * 10000) / 100
 }
 
 export class TerminalRenderer {
@@ -60,7 +95,7 @@ export class TerminalRenderer {
         this.container = container
         this.terminal = terminal
         this.options = { ...DEFAULT_OPTIONS, ...options }
-        installBlocksFont(container.ownerDocument)
+        installBlocksFont(container.ownerDocument, this.options.fontFamily)
         this.setupContainer()
         this.createRows()
         this.renderAll()
@@ -113,7 +148,11 @@ export class TerminalRenderer {
         style.fontFamily = this.options.fontFamily
         style.fontSize = `${this.options.fontSize}px`
         style.lineHeight = `${this.options.lineHeight}`
-        style.backgroundColor = 'transparent'
+        // Terminal default bg sits on the container so rows can have transparent
+        // bg — that lets a row's glyph bleed (downward into the next row via
+        // clip-path) actually show through instead of being painted over by the
+        // next row's opaque bg.
+        style.backgroundColor = this.options.background
         style.color = this.options.foreground
         style.whiteSpace = 'pre'
         style.overflow = 'hidden'
@@ -126,11 +165,11 @@ export class TerminalRenderer {
 
         for (let r = 0; r < this.terminal.rows; r++) {
             const rowEl = document.createElement('div')
-            rowEl.style.backgroundColor = this.options.background
-            // Rows clip overflow at their top/left/right boundary but permit a
-            // small bleed downward (1px). Document-order painting means the
-            // next row covers most of that bleed, so it's only visible where a
-            // subpixel gap would otherwise appear between stacked cells.
+            // Row bg is transparent so downward glyph bleed from the previous
+            // row (via the clip-path extension below) shows through — filling
+            // any subpixel gap. The container provides the terminal default bg.
+            // Cell-level bgs come from a linear-gradient backgroundImage set
+            // per-row in renderRow.
             rowEl.style.overflow = 'clip'
             rowEl.style.clipPath = 'inset(0 0 -1px 0)'
             this.container.appendChild(rowEl)

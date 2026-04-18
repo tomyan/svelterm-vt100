@@ -83,7 +83,7 @@ const STROKE_X = (CELL_W - LIGHT_STROKE) / 2
 const STROKE_Y = (CELL_H - LIGHT_STROKE) / 2
 // BLEED: how far strokes extend past the em boundary. A few units is enough
 // to cover ~0.5px of subpixel gap at typical terminal font sizes.
-const BLEED = 80  // 8% of em — ~1px at 13px font-size
+const BLEED = 80  // ~1px at 13px font — enough to cover subpixel gaps
 
 // Edge pieces: full-length stroke in the appropriate axis, bleeding past both ends
 const HSTROKE_FULL = [-BLEED, STROKE_Y, CELL_W + 2 * BLEED, LIGHT_STROKE]
