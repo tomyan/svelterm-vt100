@@ -73,6 +73,27 @@ const QUAD_TR = [CELL_W / 2, CELL_H / 2, CELL_W / 2, CELL_H / 2]
 const QUAD_BL = [0, 0, CELL_W / 2, CELL_H / 2]
 const QUAD_BR = [CELL_W / 2, 0, CELL_W / 2, CELL_H / 2]
 
+// Box-drawing strokes. Widths chosen so adjacent strokes visually align with
+// eighth-cell block borders. Strokes extend edge-to-edge of the em (plus a
+// small BLEED past the em boundary) so adjacent cells' strokes visibly connect
+// without subpixel gaps — the whole reason these chars live in our custom
+// font instead of falling back to the system font.
+const LIGHT_STROKE = CELL_W / 8
+const STROKE_X = (CELL_W - LIGHT_STROKE) / 2
+const STROKE_Y = (CELL_H - LIGHT_STROKE) / 2
+// BLEED: how far strokes extend past the em boundary. A few units is enough
+// to cover ~0.5px of subpixel gap at typical terminal font sizes.
+const BLEED = 80  // 8% of em — ~1px at 13px font-size
+
+// Edge pieces: full-length stroke in the appropriate axis, bleeding past both ends
+const HSTROKE_FULL = [-BLEED, STROKE_Y, CELL_W + 2 * BLEED, LIGHT_STROKE]
+const VSTROKE_FULL = [STROKE_X, -BLEED, LIGHT_STROKE, CELL_H + 2 * BLEED]
+// Half pieces: from cell edge (bleeding past) to centre, used to compose corner glyphs
+const HSTROKE_LEFT   = [-BLEED, STROKE_Y, CELL_W / 2 + LIGHT_STROKE / 2 + BLEED, LIGHT_STROKE]
+const HSTROKE_RIGHT  = [CELL_W / 2 - LIGHT_STROKE / 2, STROKE_Y, CELL_W / 2 + LIGHT_STROKE / 2 + BLEED, LIGHT_STROKE]
+const VSTROKE_TOP    = [STROKE_X, CELL_H / 2 - LIGHT_STROKE / 2, LIGHT_STROKE, CELL_H / 2 + LIGHT_STROKE / 2 + BLEED]
+const VSTROKE_BOTTOM = [STROKE_X, -BLEED, LIGHT_STROKE, CELL_H / 2 + LIGHT_STROKE / 2 + BLEED]
+
 const GLYPHS = {
     // Horizontal lower fractions (stroke at bottom of cell)
     0x2581: lowerN8(1),  // ▁
@@ -98,6 +119,27 @@ const GLYPHS = {
     0x2594: upperN8(1),  // ▔ upper 1/8
     0x2595: rightN8(1),  // ▕ right 1/8
     0x2580: upperN8(4),  // ▀ upper half
+
+    // --- Box drawing (light) ---
+    0x2500: [HSTROKE_FULL],                             // ─
+    0x2502: [VSTROKE_FULL],                             // │
+    0x250C: [HSTROKE_RIGHT, VSTROKE_BOTTOM],            // ┌
+    0x2510: [HSTROKE_LEFT, VSTROKE_BOTTOM],             // ┐
+    0x2514: [HSTROKE_RIGHT, VSTROKE_TOP],               // └
+    0x2518: [HSTROKE_LEFT, VSTROKE_TOP],                // ┘
+    0x251C: [HSTROKE_RIGHT, VSTROKE_FULL],              // ├
+    0x2524: [HSTROKE_LEFT, VSTROKE_FULL],               // ┤
+    0x252C: [HSTROKE_FULL, VSTROKE_BOTTOM],             // ┬
+    0x2534: [HSTROKE_FULL, VSTROKE_TOP],                // ┴
+    0x253C: [HSTROKE_FULL, VSTROKE_FULL],               // ┼
+
+    // Rounded corners — visually same strokes as sharp corners at this resolution.
+    // (A true rounded glyph would need arc paths; the eye accepts a right-angle
+    // join at typical terminal cell sizes.)
+    0x256D: [HSTROKE_RIGHT, VSTROKE_BOTTOM],            // ╭
+    0x256E: [HSTROKE_LEFT, VSTROKE_BOTTOM],             // ╮
+    0x256F: [HSTROKE_LEFT, VSTROKE_TOP],                // ╯
+    0x2570: [HSTROKE_RIGHT, VSTROKE_TOP],               // ╰
 
     // Quadrants
     0x2596: [QUAD_BL],                           // ▖
@@ -155,7 +197,7 @@ function writeCss(font) {
     font-weight: normal;
     font-style: normal;
     font-display: block;
-    unicode-range: U+2580-259F;
+    unicode-range: U+2500-259F;
 }
 `
     writeFileSync(OUT_CSS, css, 'utf8')

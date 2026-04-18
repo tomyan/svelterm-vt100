@@ -10,15 +10,6 @@ import type { Cell, Color } from './cell.js'
 import { Attr } from './cell.js'
 import { BLOCKS_FONT_CSS } from './blocks-font.js'
 
-/** Unicode Block Elements range — chars drawn by our custom font */
-function hasBlockChar(text: string): boolean {
-    for (let i = 0; i < text.length; i++) {
-        const cp = text.charCodeAt(i)
-        if (cp >= 0x2580 && cp <= 0x259F) return true
-    }
-    return false
-}
-
 export interface TerminalRendererOptions {
     /** Font family for the terminal. Default: monospace */
     fontFamily?: string
@@ -136,6 +127,12 @@ export class TerminalRenderer {
         for (let r = 0; r < this.terminal.rows; r++) {
             const rowEl = document.createElement('div')
             rowEl.style.backgroundColor = this.options.background
+            // Rows clip overflow at their top/left/right boundary but permit a
+            // small bleed downward (1px). Document-order painting means the
+            // next row covers most of that bleed, so it's only visible where a
+            // subpixel gap would otherwise appear between stacked cells.
+            rowEl.style.overflow = 'clip'
+            rowEl.style.clipPath = 'inset(0 0 -1px 0)'
             this.container.appendChild(rowEl)
             this.rowElements.push(rowEl)
         }
@@ -183,16 +180,7 @@ export class TerminalRenderer {
     private createSpan(text: string, style: string): HTMLSpanElement {
         const span = document.createElement('span')
         span.textContent = text
-        // Only spans containing block-element characters get the subpixel-gap
-        // workaround: inline-block with a 0.5px negative margin-top shifts the
-        // box off the subpixel boundary where gaps appear between stacked
-        // glyphs. Applying to every span (including box-drawing chars) would
-        // disturb their cell-centered strokes, so we scope it to block chars.
-        const style0 = hasBlockChar(text)
-            ? `display:inline-block;vertical-align:top;margin-top:-0.5px`
-            : ''
-        const combined = [style0, style].filter(Boolean).join(';')
-        if (combined) span.setAttribute('style', combined)
+        if (style) span.setAttribute('style', style)
         return span
     }
 
