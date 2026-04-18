@@ -155,26 +155,65 @@ export class TerminalRenderer {
         const rowEl = this.rowElements[row]
         rowEl.innerHTML = ''
 
-        let spanStart = 0
+        // Cell backgrounds are painted on the row via a linear-gradient. Inline
+        // spans with background-color paint behind the line box which can be
+        // slightly smaller than the row height, leaving visible horizontal gaps
+        // between rows of coloured cells. Painting bg on the row layer (one
+        // continuous gradient per row) side-steps that entirely.
+        const charWidth = this.measureCharWidth()
+        rowEl.style.backgroundImage = this.buildBgGradient(row, charWidth)
+
         let spanChars = ''
-        let lastStyle = ''
+        let lastFgStyle = ''
 
         for (let col = 0; col < this.terminal.cols; col++) {
             const cell = this.terminal.getCell(col, row)
-            const style = this.cellStyle(cell)
+            const fgStyle = this.cellFgStyle(cell)
 
-            if (style !== lastStyle && spanChars.length > 0) {
-                rowEl.appendChild(this.createSpan(spanChars, lastStyle))
+            if (fgStyle !== lastFgStyle && spanChars.length > 0) {
+                rowEl.appendChild(this.createSpan(spanChars, lastFgStyle))
                 spanChars = ''
             }
 
             spanChars += cell.char
-            lastStyle = style
+            lastFgStyle = fgStyle
         }
 
         if (spanChars.length > 0) {
-            rowEl.appendChild(this.createSpan(spanChars, lastStyle))
+            rowEl.appendChild(this.createSpan(spanChars, lastFgStyle))
         }
+    }
+
+    /**
+     * Build a CSS linear-gradient that paints each cell's background at its
+     * exact column position. Cells without an explicit bg leave gaps where
+     * the row's underlying background-color (terminal default) shows through.
+     */
+    private buildBgGradient(row: number, charWidth: number): string {
+        const stops: string[] = []
+        let runStart = 0
+        let runBg: string | null = this.cellBgColor(this.terminal.getCell(0, row))
+        for (let col = 1; col <= this.terminal.cols; col++) {
+            const cellBg = col < this.terminal.cols ? this.cellBgColor(this.terminal.getCell(col, row)) : null
+            if (cellBg !== runBg || col === this.terminal.cols) {
+                if (runBg !== null) {
+                    const startPx = runStart * charWidth
+                    const endPx = col * charWidth
+                    stops.push(`${runBg} ${startPx}px ${endPx}px`)
+                }
+                runBg = cellBg
+                runStart = col
+            }
+        }
+        if (stops.length === 0) return 'none'
+        return `linear-gradient(to right, transparent 0, ${stops.join(', ')}, transparent 100%)`
+    }
+
+    private cellBgColor(cell: Cell): string | null {
+        const fg = this.resolveColor(cell.fg, true)
+        const bg = this.resolveColor(cell.bg, false)
+        const isInverse = (cell.attrs & Attr.Inverse) !== 0
+        return isInverse ? (fg || this.options.foreground) : bg
     }
 
     private createSpan(text: string, style: string): HTMLSpanElement {
@@ -184,18 +223,16 @@ export class TerminalRenderer {
         return span
     }
 
-    private cellStyle(cell: Cell): string {
+    /** Foreground-only style (text colour, weight, etc.) — no bg. */
+    private cellFgStyle(cell: Cell): string {
         const parts: string[] = []
 
         const fg = this.resolveColor(cell.fg, true)
         const bg = this.resolveColor(cell.bg, false)
-
         const isInverse = (cell.attrs & Attr.Inverse) !== 0
         const effectiveFg = isInverse ? (bg || this.options.background) : fg
-        const effectiveBg = isInverse ? (fg || this.options.foreground) : bg
 
         if (effectiveFg) parts.push(`color:${effectiveFg}`)
-        if (effectiveBg) parts.push(`background-color:${effectiveBg}`)
         if (cell.attrs & Attr.Bold) parts.push('font-weight:bold')
         if (cell.attrs & Attr.Dim) parts.push('opacity:0.5')
         if (cell.attrs & Attr.Italic) parts.push('font-style:italic')
