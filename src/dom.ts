@@ -46,16 +46,72 @@ let fontInstalled: WeakSet<Document> | null = null
 function installBlocksFont(doc: Document, fallbackFontFamily: string): void {
     if (!fontInstalled) fontInstalled = new WeakSet()
     if (fontInstalled.has(doc)) return
-    const sizeAdjust = computeFontSizeAdjust(doc, fallbackFontFamily)
-    const css = BLOCKS_FONT_CSS.replace(
+    fontInstalled.add(doc)
+
+    // Install immediately with 100% size-adjust so our font is available
+    // during the first frames. Most monospace fallbacks (JetBrains Mono,
+    // Cascadia Code, Fira Code, etc.) have exactly 0.6 advance, matching
+    // ours — so 100% is correct for them with no flicker.
+    const style = doc.createElement('style')
+    style.setAttribute('data-svelterm-blocks-font', '')
+    style.textContent = renderFontFaceCss(100)
+    doc.head.appendChild(style)
+
+    // When fallback fonts finish loading, re-measure and update size-adjust
+    // if it doesn't match. Fonts ship as webfonts that can load after page
+    // init, so the initial measurement would see the wrong fallback.
+    doc.fonts.ready.then(() => {
+        const adjust = computeFontSizeAdjust(doc, fallbackFontFamily)
+        if (Math.abs(adjust - 100) > 0.01) {
+            style.textContent = renderFontFaceCss(adjust)
+        }
+    })
+}
+
+function renderFontFaceCss(sizeAdjust: number): string {
+    return BLOCKS_FONT_CSS.replace(
         /font-display: block;/,
         `font-display: block;\n    size-adjust: ${sizeAdjust}%;`,
     )
+}
+
+/**
+ * Install the grid stylesheet once per document. Rows are direct children
+ * of the marked container; cells are direct children of rows. Common
+ * positional styles live here so the renderer only emits inline styles for
+ * per-cell varying values (left, colour, bg, attr flags).
+ *
+ * overflow-y: visible on cells lets glyphs bleed vertically (needed for
+ * block-character stacking); overflow-x: clip prevents sideways bleed so a
+ * tall or wide glyph can't leak colour into an adjacent content cell.
+ * Row-level clip-path caps vertical bleed at ~1px past the row's bottom so
+ * the next row paints over most of it except where a subpixel gap would show.
+ */
+let gridStylesInstalled: WeakSet<Document> | null = null
+const GRID_STYLES = `
+[data-svt-grid] > div {
+    position: absolute;
+    left: 0;
+    right: 0;
+    overflow: clip;
+    clip-path: inset(0 0 -1px 0);
+}
+[data-svt-grid] > div > div {
+    position: absolute;
+    top: 0;
+    text-align: center;
+    overflow-x: clip;
+    overflow-y: visible;
+}
+`
+function installGridStyles(doc: Document): void {
+    if (!gridStylesInstalled) gridStylesInstalled = new WeakSet()
+    if (gridStylesInstalled.has(doc)) return
+    gridStylesInstalled.add(doc)
     const style = doc.createElement('style')
-    style.setAttribute('data-svelterm-blocks-font', '')
-    style.textContent = css
+    style.setAttribute('data-svelterm-grid', '')
+    style.textContent = GRID_STYLES
     doc.head.appendChild(style)
-    fontInstalled.add(doc)
 }
 
 /**
@@ -68,9 +124,16 @@ function installBlocksFont(doc: Document, fallbackFontFamily: string): void {
  */
 const OUR_ADVANCE_RATIO = 0.6  // matches ADVANCE/UNITS_PER_EM in build-blocks-font.mjs
 function computeFontSizeAdjust(doc: Document, fallbackFontFamily: string): number {
+    // Strip SveltermBlocks from the font stack — if it's loaded when we measure,
+    // the browser uses its advance width even for chars it doesn't have (like 'M'),
+    // which would make us measure our own width and compute a no-op 100%.
+    const strippedFamily = fallbackFontFamily
+        .replace(/'SveltermBlocks'\s*,\s*/g, '')
+        .replace(/"SveltermBlocks"\s*,\s*/g, '')
+        .replace(/SveltermBlocks\s*,\s*/g, '')
     const REF_SIZE = 100
     const span = doc.createElement('span')
-    span.style.fontFamily = fallbackFontFamily
+    span.style.fontFamily = strippedFamily
     span.style.fontSize = `${REF_SIZE}px`
     span.style.position = 'absolute'
     span.style.visibility = 'hidden'
@@ -148,30 +211,29 @@ export class TerminalRenderer {
         style.fontFamily = this.options.fontFamily
         style.fontSize = `${this.options.fontSize}px`
         style.lineHeight = `${this.options.lineHeight}`
-        // Terminal default bg sits on the container so rows can have transparent
-        // bg — that lets a row's glyph bleed (downward into the next row via
-        // clip-path) actually show through instead of being painted over by the
-        // next row's opaque bg.
         style.backgroundColor = this.options.background
         style.color = this.options.foreground
         style.whiteSpace = 'pre'
         style.overflow = 'hidden'
         style.position = 'relative'
+        // Marker so our stylesheet can target rows/cells without per-element classes.
+        this.container.setAttribute('data-svt-grid', '')
+        installGridStyles(this.container.ownerDocument)
     }
 
     private createRows(): void {
         this.container.innerHTML = ''
         this.rowElements = []
 
+        // Each row is a positional container; cells inside are absolutely
+        // positioned divs at exact (col * charWidth, row * lineHeight).
+        // Common positional styles come from the installed stylesheet; only
+        // per-row values (top, height) are set inline.
+        const lineHeight = this.lineHeightPx()
         for (let r = 0; r < this.terminal.rows; r++) {
             const rowEl = document.createElement('div')
-            // Row bg is transparent so downward glyph bleed from the previous
-            // row (via the clip-path extension below) shows through — filling
-            // any subpixel gap. The container provides the terminal default bg.
-            // Cell-level bgs come from a linear-gradient backgroundImage set
-            // per-row in renderRow.
-            rowEl.style.overflow = 'clip'
-            rowEl.style.clipPath = 'inset(0 0 -1px 0)'
+            rowEl.style.top = `${r * lineHeight}px`
+            rowEl.style.height = `${lineHeight}px`
             this.container.appendChild(rowEl)
             this.rowElements.push(rowEl)
         }
@@ -181,6 +243,10 @@ export class TerminalRenderer {
         this.cursorElement.style.position = 'absolute'
         this.cursorElement.style.pointerEvents = 'none'
         this.container.appendChild(this.cursorElement)
+    }
+
+    private lineHeightPx(): number {
+        return Math.round(this.options.fontSize * this.options.lineHeight)
     }
 
     private renderAll(): void {
@@ -194,96 +260,48 @@ export class TerminalRenderer {
         const rowEl = this.rowElements[row]
         rowEl.innerHTML = ''
 
-        // Cell backgrounds are painted on the row via a linear-gradient. Inline
-        // spans with background-color paint behind the line box which can be
-        // slightly smaller than the row height, leaving visible horizontal gaps
-        // between rows of coloured cells. Painting bg on the row layer (one
-        // continuous gradient per row) side-steps that entirely.
         const charWidth = this.measureCharWidth()
-        rowEl.style.backgroundImage = this.buildBgGradient(row, charWidth)
-
-        let spanChars = ''
-        let lastFgStyle = ''
+        const lineHeight = this.lineHeightPx()
 
         for (let col = 0; col < this.terminal.cols; col++) {
             const cell = this.terminal.getCell(col, row)
-            const fgStyle = this.cellFgStyle(cell)
-
-            if (fgStyle !== lastFgStyle && spanChars.length > 0) {
-                rowEl.appendChild(this.createSpan(spanChars, lastFgStyle))
-                spanChars = ''
-            }
-
-            spanChars += cell.char
-            lastFgStyle = fgStyle
-        }
-
-        if (spanChars.length > 0) {
-            rowEl.appendChild(this.createSpan(spanChars, lastFgStyle))
+            rowEl.appendChild(this.createCell(cell, col, charWidth, lineHeight))
         }
     }
 
     /**
-     * Build a CSS linear-gradient that paints each cell's background at its
-     * exact column position. Cells without an explicit bg leave gaps where
-     * the row's underlying background-color (terminal default) shows through.
+     * Create an absolutely-positioned cell at its grid coordinate. Only
+     * varying/non-default values are set inline; common positional styles
+     * come from the grid stylesheet keyed off the container's data attribute.
      */
-    private buildBgGradient(row: number, charWidth: number): string {
-        const stops: string[] = []
-        let runStart = 0
-        let runBg: string | null = this.cellBgColor(this.terminal.getCell(0, row))
-        for (let col = 1; col <= this.terminal.cols; col++) {
-            const cellBg = col < this.terminal.cols ? this.cellBgColor(this.terminal.getCell(col, row)) : null
-            if (cellBg !== runBg || col === this.terminal.cols) {
-                if (runBg !== null) {
-                    const startPx = runStart * charWidth
-                    const endPx = col * charWidth
-                    stops.push(`${runBg} ${startPx}px ${endPx}px`)
-                }
-                runBg = cellBg
-                runStart = col
-            }
-        }
-        if (stops.length === 0) return 'none'
-        return `linear-gradient(to right, transparent 0, ${stops.join(', ')}, transparent 100%)`
-    }
-
-    private cellBgColor(cell: Cell): string | null {
-        const fg = this.resolveColor(cell.fg, true)
-        const bg = this.resolveColor(cell.bg, false)
-        const isInverse = (cell.attrs & Attr.Inverse) !== 0
-        return isInverse ? (fg || this.options.foreground) : bg
-    }
-
-    private createSpan(text: string, style: string): HTMLSpanElement {
-        const span = document.createElement('span')
-        span.textContent = text
-        if (style) span.setAttribute('style', style)
-        return span
-    }
-
-    /** Foreground-only style (text colour, weight, etc.) — no bg. */
-    private cellFgStyle(cell: Cell): string {
-        const parts: string[] = []
+    private createCell(cell: Cell, col: number, charWidth: number, lineHeight: number): HTMLElement {
+        const el = document.createElement('div')
+        const style = el.style
+        style.left = `${col * charWidth}px`
+        style.width = `${charWidth}px`
+        style.height = `${lineHeight}px`
+        style.lineHeight = `${lineHeight}px`
 
         const fg = this.resolveColor(cell.fg, true)
         const bg = this.resolveColor(cell.bg, false)
         const isInverse = (cell.attrs & Attr.Inverse) !== 0
         const effectiveFg = isInverse ? (bg || this.options.background) : fg
+        const effectiveBg = isInverse ? (fg || this.options.foreground) : bg
 
-        if (effectiveFg) parts.push(`color:${effectiveFg}`)
-        if (cell.attrs & Attr.Bold) parts.push('font-weight:bold')
-        if (cell.attrs & Attr.Dim) parts.push('opacity:0.5')
-        if (cell.attrs & Attr.Italic) parts.push('font-style:italic')
+        if (effectiveFg) style.color = effectiveFg
+        if (effectiveBg) style.backgroundColor = effectiveBg
+        if (cell.attrs & Attr.Bold) style.fontWeight = 'bold'
+        if (cell.attrs & Attr.Dim) style.opacity = '0.5'
+        if (cell.attrs & Attr.Italic) style.fontStyle = 'italic'
 
         const decorations: string[] = []
         if (cell.attrs & Attr.Underline) decorations.push('underline')
         if (cell.attrs & Attr.Strikethrough) decorations.push('line-through')
-        if (decorations.length) parts.push(`text-decoration:${decorations.join(' ')}`)
+        if (decorations.length) style.textDecoration = decorations.join(' ')
+        if (cell.attrs & Attr.Invisible) style.visibility = 'hidden'
 
-        if (cell.attrs & Attr.Invisible) parts.push('visibility:hidden')
-
-        return parts.join(';')
+        el.textContent = cell.char
+        return el
     }
 
     private resolveColor(color: Color, isFg: boolean): string | null {

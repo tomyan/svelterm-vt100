@@ -57,21 +57,30 @@ function rectsPath(rects) {
 const CELL_W = ADVANCE
 const CELL_H = UNITS_PER_EM
 
+// Glyphs extend past the em boundary on cell-edge-aligned sides so adjacent
+// cells' glyphs overlap, covering any subpixel gap that would otherwise show.
+// 80 units is ~1px at a 13px CSS font-size — enough headroom at typical
+// terminal scales, small enough not to visibly thicken strokes at high zoom.
+const BLEED = 80
+
 /**
  * Glyph definitions. Each entry maps a codepoint to a list of rectangles
  * in OpenType em units. Coordinates: (0,0) = bottom-left of em.
  */
-// Helpers for common shapes
-const lowerN8 = (n) => [[0, 0, CELL_W, (CELL_H * n) / 8]]
-const leftN8  = (n) => [[0, 0, (CELL_W * n) / 8, CELL_H]]
-const upperN8 = (n) => [[0, CELL_H - (CELL_H * n) / 8, CELL_W, (CELL_H * n) / 8]]
-const rightN8 = (n) => [[CELL_W - (CELL_W * n) / 8, 0, (CELL_W * n) / 8, CELL_H]]
+// Helpers for common shapes. Each extends past the em boundary on edges that
+// run along the cell edge so adjacent cells' glyphs overlap, covering any
+// subpixel gap that would otherwise appear between stacked or adjacent cells.
+const lowerN8 = (n) => [[-BLEED, -BLEED, CELL_W + 2 * BLEED, (CELL_H * n) / 8 + BLEED]]
+const upperN8 = (n) => [[-BLEED, CELL_H - (CELL_H * n) / 8, CELL_W + 2 * BLEED, (CELL_H * n) / 8 + BLEED]]
+const leftN8  = (n) => [[-BLEED, -BLEED, (CELL_W * n) / 8 + BLEED, CELL_H + 2 * BLEED]]
+const rightN8 = (n) => [[CELL_W - (CELL_W * n) / 8, -BLEED, (CELL_W * n) / 8 + BLEED, CELL_H + 2 * BLEED]]
 
-// Quadrants — each rectangle is half the em in each axis
-const QUAD_TL = [0, CELL_H / 2, CELL_W / 2, CELL_H / 2]
-const QUAD_TR = [CELL_W / 2, CELL_H / 2, CELL_W / 2, CELL_H / 2]
-const QUAD_BL = [0, 0, CELL_W / 2, CELL_H / 2]
-const QUAD_BR = [CELL_W / 2, 0, CELL_W / 2, CELL_H / 2]
+// Quadrants — each rectangle is half the em in each axis, extended with BLEED
+// on its two cell-edge-aligned sides so adjacent same-quadrant cells merge.
+const QUAD_TL = [-BLEED, CELL_H / 2, CELL_W / 2 + BLEED, CELL_H / 2 + BLEED]
+const QUAD_TR = [CELL_W / 2, CELL_H / 2, CELL_W / 2 + BLEED, CELL_H / 2 + BLEED]
+const QUAD_BL = [-BLEED, -BLEED, CELL_W / 2 + BLEED, CELL_H / 2 + BLEED]
+const QUAD_BR = [CELL_W / 2, -BLEED, CELL_W / 2 + BLEED, CELL_H / 2 + BLEED]
 
 // Box-drawing strokes. Widths chosen so adjacent strokes visually align with
 // eighth-cell block borders. Strokes extend edge-to-edge of the em (plus a
@@ -81,9 +90,6 @@ const QUAD_BR = [CELL_W / 2, 0, CELL_W / 2, CELL_H / 2]
 const LIGHT_STROKE = CELL_W / 8
 const STROKE_X = (CELL_W - LIGHT_STROKE) / 2
 const STROKE_Y = (CELL_H - LIGHT_STROKE) / 2
-// BLEED: how far strokes extend past the em boundary. A few units is enough
-// to cover ~0.5px of subpixel gap at typical terminal font sizes.
-const BLEED = 80  // ~1px at 13px font — enough to cover subpixel gaps
 
 // Edge pieces: full-length stroke in the appropriate axis, bleeding past both ends
 const HSTROKE_FULL = [-BLEED, STROKE_Y, CELL_W + 2 * BLEED, LIGHT_STROKE]
@@ -103,7 +109,8 @@ const GLYPHS = {
     0x2585: lowerN8(5),  // ▅
     0x2586: lowerN8(6),  // ▆
     0x2587: lowerN8(7),  // ▇
-    0x2588: lowerN8(8),  // █ full block
+    // █ full block — bleed on all four sides
+    0x2588: [[-BLEED, -BLEED, CELL_W + 2 * BLEED, CELL_H + 2 * BLEED]],
 
     // Vertical left fractions (stroke at left of cell)
     0x2589: leftN8(7),   // ▉
