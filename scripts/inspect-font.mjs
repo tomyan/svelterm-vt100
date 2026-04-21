@@ -19,10 +19,14 @@ console.log('  os2.sTypoAscender:', font.tables.os2?.sTypoAscender)
 console.log('  os2.sTypoDescender:', font.tables.os2?.sTypoDescender)
 console.log('  os2.sTypoLineGap:', font.tables.os2?.sTypoLineGap)
 
-const u2502 = font.glyphs.glyphs[Object.values(font.glyphs.glyphs).findIndex(g => g.unicode === 0x2502)]
-if (u2502) {
-    console.log('\n│ glyph (U+2502):')
-    console.log('  xMin:', u2502.xMin, 'xMax:', u2502.xMax)
-    console.log('  yMin:', u2502.yMin, 'yMax:', u2502.yMax)
-    console.log('  advanceWidth:', u2502.advanceWidth)
+for (const cp of [0x2594, 0x2581, 0x258F]) {
+    const idx = Object.values(font.glyphs.glyphs).findIndex(g => g.unicode === cp)
+    const g = font.glyphs.glyphs[idx]
+    console.log(`\nglyph U+${cp.toString(16).toUpperCase()} (${String.fromCodePoint(cp)}):`)
+    console.log('  unicode:', g.unicode)
+    console.log('  advanceWidth:', g.advanceWidth)
+    const path = g.path
+    if (path && path.commands) {
+        console.log('  path commands:', JSON.stringify(path.commands.slice(0, 10)))
+    }
 }

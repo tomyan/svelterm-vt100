@@ -8,7 +8,93 @@
 import type { Terminal } from './terminal.js'
 import type { Cell, Color } from './cell.js'
 import { Attr } from './cell.js'
-import { BLOCKS_FONT_CSS } from './blocks-font.js'
+
+/**
+ * Return a CSS `background-image` value for a block-element character
+ * (U+2580–U+259F) that draws the glyph as a pixel-precise fill in `color`.
+ * Returns null for characters outside that range.
+ *
+ * Rendering block elements as CSS gradients side-steps font rasterisation
+ * artefacts at small sizes — the fill is drawn exactly to the cell box, no
+ * matter the fallback font.
+ */
+function blockGlyphBackground(codepoint: number, color: string): string | null {
+    const lower = (pct: number) => `linear-gradient(to top, ${color} ${pct}%, transparent ${pct}%)`
+    const left  = (pct: number) => `linear-gradient(to right, ${color} ${pct}%, transparent ${pct}%)`
+    switch (codepoint) {
+        // Lower partial blocks (▁▂▃▄▅▆▇)
+        case 0x2581: return lower(12.5)   // ▁
+        case 0x2582: return lower(25)     // ▂
+        case 0x2583: return lower(37.5)   // ▃
+        case 0x2584: return lower(50)     // ▄
+        case 0x2585: return lower(62.5)   // ▅
+        case 0x2586: return lower(75)     // ▆
+        case 0x2587: return lower(87.5)   // ▇
+        case 0x2588: return `linear-gradient(${color}, ${color})`  // █
+        // Left partial blocks (▉▊▋▌▍▎▏)
+        case 0x2589: return left(87.5)    // ▉
+        case 0x258A: return left(75)      // ▊
+        case 0x258B: return left(62.5)    // ▋
+        case 0x258C: return left(50)      // ▌
+        case 0x258D: return left(37.5)    // ▍
+        case 0x258E: return left(25)      // ▎
+        case 0x258F: return left(12.5)    // ▏
+        // Right half and upper/right eighths (▐ ▔ ▕)
+        case 0x2590: return `linear-gradient(to left, ${color} 50%, transparent 50%)`    // ▐
+        case 0x2594: return `linear-gradient(to bottom, ${color} 12.5%, transparent 12.5%)` // ▔
+        case 0x2595: return `linear-gradient(to left, ${color} 12.5%, transparent 12.5%)`   // ▕
+        case 0x2580: return `linear-gradient(to bottom, ${color} 50%, transparent 50%)`  // ▀
+        // Quadrants (single) — layered gradients positioned via background-position/size
+        case 0x2596: return quadrant(color, false, false, true, false)   // ▖ lower-left
+        case 0x2597: return quadrant(color, false, false, false, true)   // ▗ lower-right
+        case 0x2598: return quadrant(color, true, false, false, false)   // ▘ upper-left
+        case 0x259D: return quadrant(color, false, true, false, false)   // ▝ upper-right
+        // Three-quadrant L shapes
+        case 0x2599: return quadrant(color, true, false, true, true)     // ▙ TL+BL+BR
+        case 0x259B: return quadrant(color, true, true, true, false)     // ▛ TL+TR+BL
+        case 0x259C: return quadrant(color, true, true, false, true)     // ▜ TL+TR+BR
+        case 0x259F: return quadrant(color, false, true, true, true)     // ▟ TR+BL+BR
+        // Diagonal pairs
+        case 0x259A: return quadrant(color, true, false, false, true)    // ▚ TL+BR
+        case 0x259E: return quadrant(color, false, true, true, false)    // ▞ TR+BL
+        // Shading blocks (approximated via opacity on a solid fill)
+        case 0x2591: return `linear-gradient(${color}, ${color})`  // ░ (see opacity handling below)
+        case 0x2592: return `linear-gradient(${color}, ${color})`  // ▒
+        case 0x2593: return `linear-gradient(${color}, ${color})`  // ▓
+    }
+    return null
+}
+
+/**
+ * Build a multi-stop background for the four cell quadrants. Each quadrant
+ * is a 50%x50% rectangle in one corner; passing `true` fills that quadrant.
+ */
+function quadrant(color: string, tl: boolean, tr: boolean, bl: boolean, br: boolean): string {
+    const layers: string[] = []
+    // Each layer: linear-gradient solid-or-transparent + background-position/size
+    // Simpler approach: four overlapping linear-gradients confined to corners
+    // via background-size and background-position.
+    const add = (fill: boolean, bgPos: string) => {
+        if (fill) {
+            layers.push(`linear-gradient(${color}, ${color}) ${bgPos} / 50% 50% no-repeat`)
+        }
+    }
+    add(tl, 'top left')
+    add(tr, 'top right')
+    add(bl, 'bottom left')
+    add(br, 'bottom right')
+    return layers.join(', ')
+}
+
+/** Opacity for shading blocks when rendered via gradient. */
+function blockGlyphOpacity(codepoint: number): number | null {
+    switch (codepoint) {
+        case 0x2591: return 0.25  // ░
+        case 0x2592: return 0.5   // ▒
+        case 0x2593: return 0.75  // ▓
+    }
+    return null
+}
 
 export interface TerminalRendererOptions {
     /** Font family for the terminal. Default: monospace */
@@ -24,7 +110,7 @@ export interface TerminalRendererOptions {
 }
 
 const DEFAULT_OPTIONS: Required<TerminalRendererOptions> = {
-    fontFamily: "'SveltermBlocks', 'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace",
+    fontFamily: "'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace",
     fontSize: 14,
     lineHeight: 1.2,
     foreground: '#cccccc',
@@ -32,60 +118,10 @@ const DEFAULT_OPTIONS: Required<TerminalRendererOptions> = {
 }
 
 /**
- * Install the @font-face declaration for SveltermBlocks exactly once per document.
- * Block-element and box-drawing glyphs are served from this font with metrics
- * that fill the em box edge-to-edge; the browser falls back to the next font
- * in the stack for every other codepoint.
- *
- * Measures the fallback font's character width and injects a `size-adjust`
- * descriptor so our font's advance matches the fallback's exactly. Without
- * this, mixing our glyphs with fallback-font glyphs drifts horizontally by
- * the ratio mismatch, breaking cell alignment along a row.
- */
-let fontInstalled: WeakSet<Document> | null = null
-function installBlocksFont(doc: Document, fallbackFontFamily: string): void {
-    if (!fontInstalled) fontInstalled = new WeakSet()
-    if (fontInstalled.has(doc)) return
-    fontInstalled.add(doc)
-
-    // Install immediately with 100% size-adjust so our font is available
-    // during the first frames. Most monospace fallbacks (JetBrains Mono,
-    // Cascadia Code, Fira Code, etc.) have exactly 0.6 advance, matching
-    // ours — so 100% is correct for them with no flicker.
-    const style = doc.createElement('style')
-    style.setAttribute('data-svelterm-blocks-font', '')
-    style.textContent = renderFontFaceCss(100)
-    doc.head.appendChild(style)
-
-    // When fallback fonts finish loading, re-measure and update size-adjust
-    // if it doesn't match. Fonts ship as webfonts that can load after page
-    // init, so the initial measurement would see the wrong fallback.
-    doc.fonts.ready.then(() => {
-        const adjust = computeFontSizeAdjust(doc, fallbackFontFamily)
-        if (Math.abs(adjust - 100) > 0.01) {
-            style.textContent = renderFontFaceCss(adjust)
-        }
-    })
-}
-
-function renderFontFaceCss(sizeAdjust: number): string {
-    return BLOCKS_FONT_CSS.replace(
-        /font-display: block;/,
-        `font-display: block;\n    size-adjust: ${sizeAdjust}%;`,
-    )
-}
-
-/**
  * Install the grid stylesheet once per document. Rows are direct children
  * of the marked container; cells are direct children of rows. Common
  * positional styles live here so the renderer only emits inline styles for
- * per-cell varying values (left, colour, bg, attr flags).
- *
- * overflow-y: visible on cells lets glyphs bleed vertically (needed for
- * block-character stacking); overflow-x: clip prevents sideways bleed so a
- * tall or wide glyph can't leak colour into an adjacent content cell.
- * Row-level clip-path caps vertical bleed at ~1px past the row's bottom so
- * the next row paints over most of it except where a subpixel gap would show.
+ * per-cell varying values (left, width, height, colour, bg, attr flags).
  */
 let gridStylesInstalled: WeakSet<Document> | null = null
 const GRID_STYLES = `
@@ -93,15 +129,15 @@ const GRID_STYLES = `
     position: absolute;
     left: 0;
     right: 0;
-    overflow: clip;
-    clip-path: inset(0 0 -1px 0);
+    height: 1em;
+    line-height: 1em;
 }
 [data-svt-grid] > div > div {
     position: absolute;
     top: 0;
+    height: 1em;
+    line-height: 1em;
     text-align: center;
-    overflow-x: clip;
-    overflow-y: visible;
 }
 `
 function installGridStyles(doc: Document): void {
@@ -112,38 +148,6 @@ function installGridStyles(doc: Document): void {
     style.setAttribute('data-svelterm-grid', '')
     style.textContent = GRID_STYLES
     doc.head.appendChild(style)
-}
-
-/**
- * Compute the size-adjust percentage that makes our font's advance match
- * the fallback font's advance at the same CSS font-size.
- *
- * Our glyphs use advanceWidth = 600 within a 1000-unit em (ratio 0.6).
- * If the fallback's advance ratio is R, setting size-adjust to (R / 0.6)
- * scales our font so its rendered advance matches the fallback's.
- */
-const OUR_ADVANCE_RATIO = 0.6  // matches ADVANCE/UNITS_PER_EM in build-blocks-font.mjs
-function computeFontSizeAdjust(doc: Document, fallbackFontFamily: string): number {
-    // Strip SveltermBlocks from the font stack — if it's loaded when we measure,
-    // the browser uses its advance width even for chars it doesn't have (like 'M'),
-    // which would make us measure our own width and compute a no-op 100%.
-    const strippedFamily = fallbackFontFamily
-        .replace(/'SveltermBlocks'\s*,\s*/g, '')
-        .replace(/"SveltermBlocks"\s*,\s*/g, '')
-        .replace(/SveltermBlocks\s*,\s*/g, '')
-    const REF_SIZE = 100
-    const span = doc.createElement('span')
-    span.style.fontFamily = strippedFamily
-    span.style.fontSize = `${REF_SIZE}px`
-    span.style.position = 'absolute'
-    span.style.visibility = 'hidden'
-    span.style.whiteSpace = 'pre'
-    span.textContent = 'M'
-    doc.body.appendChild(span)
-    const fallbackAdvance = span.getBoundingClientRect().width
-    doc.body.removeChild(span)
-    const fallbackRatio = fallbackAdvance / REF_SIZE
-    return Math.round((fallbackRatio / OUR_ADVANCE_RATIO) * 10000) / 100
 }
 
 export class TerminalRenderer {
@@ -158,7 +162,6 @@ export class TerminalRenderer {
         this.container = container
         this.terminal = terminal
         this.options = { ...DEFAULT_OPTIONS, ...options }
-        installBlocksFont(container.ownerDocument, this.options.fontFamily)
         this.setupContainer()
         this.createRows()
         this.renderAll()
@@ -227,13 +230,11 @@ export class TerminalRenderer {
 
         // Each row is a positional container; cells inside are absolutely
         // positioned divs at exact (col * charWidth, row * lineHeight).
-        // Common positional styles come from the installed stylesheet; only
-        // per-row values (top, height) are set inline.
+        // Height comes from the stylesheet (1em); only `top` is per-row.
         const lineHeight = this.lineHeightPx()
         for (let r = 0; r < this.terminal.rows; r++) {
             const rowEl = document.createElement('div')
             rowEl.style.top = `${r * lineHeight}px`
-            rowEl.style.height = `${lineHeight}px`
             this.container.appendChild(rowEl)
             this.rowElements.push(rowEl)
         }
@@ -274,13 +275,11 @@ export class TerminalRenderer {
      * varying/non-default values are set inline; common positional styles
      * come from the grid stylesheet keyed off the container's data attribute.
      */
-    private createCell(cell: Cell, col: number, charWidth: number, lineHeight: number): HTMLElement {
+    private createCell(cell: Cell, col: number, charWidth: number, _lineHeight: number): HTMLElement {
         const el = document.createElement('div')
         const style = el.style
         style.left = `${col * charWidth}px`
         style.width = `${charWidth}px`
-        style.height = `${lineHeight}px`
-        style.lineHeight = `${lineHeight}px`
 
         const fg = this.resolveColor(cell.fg, true)
         const bg = this.resolveColor(cell.bg, false)
@@ -288,8 +287,27 @@ export class TerminalRenderer {
         const effectiveFg = isInverse ? (bg || this.options.background) : fg
         const effectiveBg = isInverse ? (fg || this.options.foreground) : bg
 
-        if (effectiveFg) style.color = effectiveFg
-        if (effectiveBg) style.backgroundColor = effectiveBg
+        // Block-element characters get a CSS gradient background painted in
+        // the cell's foreground colour, bypassing font rasterisation so the
+        // shape is exactly cell-sized. The character stays in the DOM (with
+        // transparent colour) so it's still selectable/copyable.
+        const cp = cell.char.codePointAt(0) ?? 0
+        const fgForBlock = effectiveFg || this.options.foreground
+        const blockBg = blockGlyphBackground(cp, fgForBlock)
+
+        if (blockBg) {
+            style.color = 'transparent'
+            // Use `background` shorthand so the block-glyph string can carry
+            // per-layer position/size/repeat (needed for quadrant gradients).
+            // Prepend the cell bg colour as the underlying solid layer.
+            const bgColor = effectiveBg || 'transparent'
+            style.background = `${blockBg}, ${bgColor}`
+            const opacity = blockGlyphOpacity(cp)
+            if (opacity !== null) style.opacity = String(opacity)
+        } else {
+            if (effectiveFg) style.color = effectiveFg
+            if (effectiveBg) style.backgroundColor = effectiveBg
+        }
         if (cell.attrs & Attr.Bold) style.fontWeight = 'bold'
         if (cell.attrs & Attr.Dim) style.opacity = '0.5'
         if (cell.attrs & Attr.Italic) style.fontStyle = 'italic'
