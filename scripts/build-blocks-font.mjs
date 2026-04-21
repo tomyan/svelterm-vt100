@@ -191,6 +191,14 @@ function buildFont() {
         glyphs,
     })
 
+    // opentype.js auto-computes OS/2.usWinAscent/usWinDescent from the glyph
+    // bounding boxes including our BLEED overflow. Browsers use those metrics
+    // to size the line box, which makes line-height: 1 larger than the em and
+    // shifts all glyphs downward. Override with the nominal em values so the
+    // font reports a clean 1:1 em-to-line-height ratio regardless of bleed.
+    font.tables.os2.usWinAscent = ASCENDER
+    font.tables.os2.usWinDescent = 0
+
     return font
 }
 
