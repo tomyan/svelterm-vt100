@@ -10,10 +10,6 @@
       "types": "./dist/src/index.d.ts",
       "default": "./dist/src/index.js"
     },
-    "./dom": {
-      "types": "./dist/src/dom.d.ts",
-      "default": "./dist/src/dom.js"
-    },
     "./svelte": {
       "types": "./src/TerminalView.svelte",
       "svelte": "./src/TerminalView.svelte",

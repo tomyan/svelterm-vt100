@@ -33,6 +33,12 @@ export class Terminal {
     onTitleChange?: (title: string) => void
     onBell?: () => void
     onResponse?: (data: string) => void
+    /** Fires after any mutation to the terminal state (writes, resizes). */
+    onChange?: () => void
+
+    // Streaming UTF-8 decoder for byte inputs (preserves partial sequences
+    // across writes — critical for PTY / serial consumers).
+    private decoder = new TextDecoder('utf-8', { fatal: false })
 
     // Terminal colors for OSC query responses
     backgroundColor = '#0d1117'
@@ -56,8 +62,21 @@ export class Terminal {
         return this._cursor
     }
 
-    write(input: string): void {
-        this.parser.feed(input)
+    /**
+     * Feed input into the terminal.
+     *
+     * `Uint8Array` is the canonical form for stream consumers — partial
+     * UTF-8 sequences across writes are preserved via a streaming decoder.
+     * `string` is accepted for ergonomics (literal escape sequences in
+     * tests, error messages composed in-process) — callers are assumed
+     * to have handed in a complete character sequence.
+     */
+    write(input: Uint8Array | string): void {
+        const str = typeof input === 'string'
+            ? input
+            : this.decoder.decode(input, { stream: true })
+        this.parser.feed(str)
+        this.onChange?.()
     }
 
     getCell(col: number, row: number): Cell {
@@ -87,6 +106,7 @@ export class Terminal {
         this.wrapNext = false
         this.dirtyRows.clear()
         for (let r = 0; r < newRows; r++) this.dirtyRows.add(r)
+        this.onChange?.()
     }
 
     private markDirty(row: number): void {

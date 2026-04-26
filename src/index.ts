@@ -1,4 +1,5 @@
 export { Parser, type ParserEvent } from './parser.js'
 export { Terminal } from './terminal.js'
 export { type Cell, type Color, Attr } from './cell.js'
-export { TerminalRenderer, type TerminalRendererOptions } from './dom.js'
+export { keyEventToBytes, type KeyInput } from './input.js'
+export { blockGlyphBackground, blockGlyphOpacity } from './block-glyphs.js'

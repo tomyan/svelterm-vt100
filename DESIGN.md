@@ -1,138 +1,273 @@
 # @svelterm/vt100 Design
 
-A complete VT100/VT220/xterm terminal emulator in TypeScript. Interprets
-ANSI escape sequences and maintains a cell grid. No rendering opinion —
-consumers render the grid however they want (DOM, canvas, svelterm cells).
+A VT100/VT220/xterm terminal emulator in TypeScript, plus the rendering,
+input encoding, stream abstraction, and PTY adapter needed to embed a
+terminal stream inside a Svelte / svelterm application.
+
+The package is the single-pane primitive that tmux-style terminal
+applications are built on top of. It covers everything from raw bytes to
+rendered output, but stops short of composing panes or managing sessions —
+those live in the host application.
+
+## Scope
+
+In:
+- ANSI byte stream → terminal state machine → cell grid (`Parser`,
+  `Terminal`)
+- Rendering a cell grid in both browser (DOM) and svelterm (terminal
+  output) targets, from one reactive Svelte component (`TerminalView`)
+- Encoding browser `KeyboardEvent`s to ANSI input bytes (`keyEventToBytes`)
+- A stream interface (`TerminalStream`) for bidirectional byte flow with
+  resize coordination
+- A composed embedded-terminal primitive (`EmbeddedTerminal`) — one stream
+  in, a live terminal view out
+- A PTY adapter (`@svelterm/vt100/pty`) that spawns a child process on a
+  pseudo-terminal and exposes it as a `TerminalStream`
+
+Out:
+- Pane layout, tabs, status bars — tmux-style composition lives in the
+  application, using `EmbeddedTerminal` per pane.
+- Terminal multiplexer logic (session management, detached sessions,
+  shared buffers) — same, belongs above this package.
 
 ## Architecture
 
 ```
-input bytes → Parser → Terminal state machine → Cell grid
-                                                    ↑
-                                              consumer reads
+       ┌────────────────────────────────────────────────────────┐
+       │                  EmbeddedTerminal                      │
+       │                                                        │
+       │   TerminalStream ──▶ Terminal ──▶ TerminalView         │
+       │       ▲              (state)       (view)              │
+       │       │                                                │
+       │     KeyboardEvent ─▶ keyEventToBytes ─▶ bytes          │
+       │                                                        │
+       └────────────────────────────────────────────────────────┘
 ```
 
-Three layers:
+Layers are independently usable. A consumer wanting finer control can drop
+`EmbeddedTerminal` and wire `Terminal` + `TerminalView` + their own stream
+adapter by hand.
 
-### 1. Parser
+## Layers
 
-Byte-level ANSI escape sequence parser. Classifies input into:
+### Parser
 
-- **Print** — regular characters to display
-- **Execute** — C0/C1 control codes (BEL, BS, HT, LF, CR, etc.)
-- **CSI** — Control Sequence Introducer (`ESC [` params final)
-- **OSC** — Operating System Command (`ESC ]` ... ST)
-- **DCS** — Device Control String (`ESC P` ... ST)
-- **ESC** — Simple escape sequences (`ESC` + intermediate + final)
+Byte-level ANSI escape sequence parser. Emits events classifying input into
+print, execute, CSI, OSC, DCS, ESC. Follows the VT500-series parser state
+machine. Handles UTF-8 decoding, malformed sequences, intermediate bytes,
+parameters with defaults and sub-parameters.
 
-The parser is a state machine following the VT500-series model
-(Paul Flo Williams' parser). It handles:
-- UTF-8 decoding
-- Malformed sequences (recover gracefully)
-- Intermediate bytes in CSI/ESC sequences
-- Parameters with defaults and sub-parameters (`;` and `:`)
+### Terminal
 
-The parser emits events — it does not interpret them. That's the
-terminal's job.
+Interprets parsed events and updates state:
 
-### 2. Terminal
-
-Interprets parsed sequences and updates state:
-
-**Screen state:**
 - Primary and alternate screen buffers
-- Cursor position, style (block/underline/bar), visibility
-- Scroll region (DECSTBM top/bottom margins)
-- Tab stops
-- Origin mode (DECOM)
-- Auto-wrap mode (DECAWM)
-- Insert/replace mode (IRM)
-- Character sets (G0/G1, SCS)
+- Cursor position, style, visibility
+- Scroll region, origin mode, auto-wrap, insert/replace, character sets
+- SGR: fg/bg (default/indexed/RGB), bold/dim/italic/underline/blink/
+  inverse/invisible/strikethrough, underline styles, hyperlinks (OSC 8)
+- Cursor ops, erase, insert/delete, scroll, tabs, LF/CR/BS
+- Alternate screen switching, private modes
+- Window title (OSC 0/2), mouse modes, bracketed paste, synchronised
+  output
 
-**Cell attributes (SGR):**
-- Foreground color: default, ANSI 8, ANSI 16, 256-color, truecolor
-- Background color: same
-- Bold, dim, italic, underline, blink, inverse, invisible, strikethrough
-- Underline styles (single, double, curly, dotted, dashed)
-- Hyperlinks (OSC 8)
+API:
 
-**Operations:**
-- Print character at cursor, advance cursor
-- Cursor movement: absolute (CUP), relative (CUU/CUD/CUF/CUB),
-  save/restore (DECSC/DECRC), column (CHA), line (VPA)
-- Erase: line (EL), display (ED), characters (ECH)
-- Insert/delete: lines (IL/DL), characters (ICH/DCH)
-- Scroll: up (SU), down (SD), within margins
-- Tabs: set (HTS), clear (TBC), horizontal tab (HT)
-- Line feed, carriage return, backspace
-- Alternate screen: switch (DECSET 1049), clear on switch
-- Private modes: DECSET/DECRST for all common modes
-- Window title (OSC 0/2)
-- Mouse mode tracking state (for reporting back to consumer)
-- Bracketed paste mode tracking
-- Synchronized output mode (DEC 2026)
+```ts
+const term = new Terminal(cols, rows)
+term.write(bytes: Uint8Array)        // bytes in from the stream
+term.resize(cols, rows)
+term.getCell(col, row): Cell
+term.cursor                          // { col, row, visible, style }
+term.onChange = () => { ... }        // fires after every mutation
+term.onResponse = (bytes) => { ... } // terminal → stream (e.g. DSR)
+term.onTitleChange = (title) => { ... }
+term.onBell = () => { ... }
+```
 
-### 3. Cell Grid
+Bytes in, bytes out. No strings at the edge — partial UTF-8 sequences
+across writes would break a string boundary.
 
-The grid is the output — a 2D array of cells that consumers read.
+### Cell grid
 
-```typescript
+```ts
 interface Cell {
-    char: string          // single character (or empty)
-    width: number         // 1 for normal, 2 for wide (CJK)
+    char: string
+    width: number           // 1 normal, 2 wide (CJK)
     fg: Color
     bg: Color
-    attrs: number         // bit flags for bold, dim, italic, etc.
-    hyperlink?: string    // OSC 8 URI
+    attrs: number           // bitflags
+    hyperlink?: string
 }
-
 type Color =
     | { type: 'default' }
-    | { type: 'indexed'; index: number }    // 0-255
+    | { type: 'indexed'; index: number }
     | { type: 'rgb'; r: number; g: number; b: number }
 ```
 
-The grid supports:
-- Resize (reflow or truncate)
-- Scrollback buffer (configurable line count)
-- Dirty tracking (which rows changed since last read)
+Cells are mutated in place. Reactive consumers that key on object
+identity (Svelte's `{#each}`) must clone on read.
 
-## Consumer Interface
+### Input encoding
 
-```typescript
-const term = new Terminal({ cols: 80, rows: 24 })
+`keyEventToBytes(event: KeyInput): Uint8Array` — maps a DOM-like
+KeyboardEvent shape to ANSI input bytes. Covers printable chars, Ctrl
+combinations, Alt prefixes, arrows, Home/End/Page/Insert/Delete, F1–F12,
+and modifier-only events (returns empty).
 
-// Feed input
-term.write('Hello \x1b[31mworld\x1b[0m\r\n')
-term.write(buffer)  // Uint8Array also accepted
+`KeyInput` is a structural subset of `KeyboardEvent` (`key`, `ctrlKey`,
+`altKey`, `shiftKey`, `metaKey`), so DOM events can be passed directly.
 
-// Read state
-const cell = term.getCell(col, row)
-const cursor = term.cursor        // { col, row, visible, style }
-const title = term.title
-const size = term.size             // { cols, rows }
-const dirtyRows = term.getDirtyRows()
-term.clearDirty()
+### TerminalStream
 
-// Resize
-term.resize(120, 40)
-
-// Mode queries (for input routing)
-term.mouseMode                     // 'none' | 'x10' | 'normal' | 'sgr'
-term.bracketedPaste                // boolean
-term.applicationCursor             // boolean (for arrow key encoding)
-term.applicationKeypad             // boolean
-
-// Events
-term.onTitleChange(title => ...)
-term.onBell(() => ...)
-term.onResize(({ cols, rows }) => ...)
+```ts
+interface TerminalStream {
+    onOutput(listener: (bytes: Uint8Array) => void): () => void
+    write(bytes: Uint8Array): void
+    resize(cols: number, rows: number): void
+    onClose(listener: () => void): () => void
+    close(): void
+}
 ```
 
-## What This Is Not
+A bidirectional byte channel with viewport-size coordination. Not a PTY,
+not a process — a stream. Adapters bridge specific sources to this shape:
 
-- **Not a renderer.** No DOM, no canvas, no terminal output. Just state.
-- **Not an input encoder.** Consumers encode keyboard/mouse events into
-  ANSI and feed them via `write()`. A separate utility can help with
-  this.
-- **Not a PTY.** No process spawning. Consumers connect their own IO.
+- `@svelterm/vt100/pty` — spawn a process on a pseudo-terminal (Node + Bun)
+- User code — v86 serial port, WebSocket, anything that produces bytes
+
+`resize` is how the far end learns about viewport changes — a PTY calls
+`TIOCSWINSZ` and sends `SIGWINCH`; a WebSocket sends a resize message; an
+in-process bridge forwards to its peer.
+
+### TerminalView
+
+```svelte
+<TerminalView {terminal} foreground="#ccc" background="#000" />
+```
+
+Reactive Svelte component that renders a `Terminal`'s cell grid. Subscribes
+to `terminal.onChange`, snapshots cells on each tick, renders as `<div>`
+rows and `<span>` cells.
+
+Dual-target:
+- **Browser**: real DOM, monospace font, inline `color`/`background`/
+  `font-weight`/etc. — produces the terminal look.
+- **Svelterm target**: svelterm's renderer interprets the same markup —
+  divs become box nodes, spans become text nodes, inline styles resolve to
+  terminal colours/attributes. The cell grid flows out as ANSI.
+
+There is only one rendering path.
+
+### EmbeddedTerminal
+
+```svelte
+<EmbeddedTerminal {stream} />
+```
+
+The composed primitive. Internally:
+
+1. Creates a `Terminal` sized to its allocated cell space
+2. Subscribes `stream.onOutput` → `terminal.write`
+3. Captures keystrokes from its container → `keyEventToBytes` →
+   `stream.write`
+4. Observes its own size → `terminal.resize` → `stream.resize`
+5. Renders via `<TerminalView>`
+
+This is the component a tmux-style host drops into each pane. All the
+caller supplies is a stream.
+
+### PTY adapter
+
+Subpath: `@svelterm/vt100/pty`. Server-side only (Node / Bun).
+
+```ts
+import { spawnPty } from '@svelterm/vt100/pty'
+
+const stream = spawnPty('bash', [], { cwd: '/home/alice', env: process.env })
+// stream is a TerminalStream
+```
+
+Hand-rolled ioctl-based implementation (no `node-pty` dependency, no
+native build step). macOS and Linux to begin with. The resulting
+`TerminalStream` plugs straight into `EmbeddedTerminal`.
+
+Browser consumers don't import this subpath. They adapt their own source
+(v86, WebSocket, etc.) to `TerminalStream`.
+
+## Dual-target rendering
+
+`TerminalView` produces markup meaningful to both a browser DOM engine and
+svelterm's renderer:
+
+- Block-level rows, inline cells — both targets understand these
+- Inline CSS for per-cell colour/attr — both targets honour the relevant
+  properties
+- Flow positioning, not absolute — svelterm doesn't handle absolute in
+  this mode
+
+In the svelterm target, the output is a grid of ANSI representing a
+terminal screen's state — correct, but not *true* passthrough (we parse +
+re-emit). If svelterm gains a raw-bytes primitive (a node type that owns a
+region and pipes bytes through), `TerminalView` can adopt it in the
+svelterm target for true passthrough. That's a framework-side addition,
+not a vt100 change.
+
+## Consumer examples
+
+### Low-level: bring your own everything
+
+```ts
+const term = new Terminal(80, 24)
+term.onChange = () => scheduleRender()
+term.write(incomingBytes)
+
+renderCells(term)
+container.addEventListener('keydown', e => {
+    const bytes = keyEventToBytes(e)
+    if (bytes.length) sendToProcess(bytes)
+})
+```
+
+### Mid-level: view component + own stream wiring
+
+```svelte
+<script>
+    import { Terminal, TerminalView, keyEventToBytes } from '@svelterm/vt100'
+
+    const terminal = new Terminal(80, 24)
+    stream.onOutput(bytes => terminal.write(bytes))
+
+    function onKeydown(e) {
+        const bytes = keyEventToBytes(e)
+        if (bytes.length) stream.write(bytes)
+    }
+</script>
+
+<div tabindex="0" onkeydown={onKeydown}>
+    <TerminalView {terminal} />
+</div>
+```
+
+### High-level: drop in a stream
+
+```svelte
+<script>
+    import { EmbeddedTerminal } from '@svelterm/vt100'
+    import { spawnPty } from '@svelterm/vt100/pty'
+
+    const stream = spawnPty('bash')
+</script>
+
+<EmbeddedTerminal {stream} />
+```
+
+Tmux-style application: one `<EmbeddedTerminal>` per pane, composed with
+svelterm's layout primitives.
+
+## What this is not
+
+- **Not a pane manager.** Layout, tabs, status bars live above this
+  package.
+- **Not a terminal multiplexer.** Session management, detached buffers,
+  shared output — those belong to an application built on this primitive.
