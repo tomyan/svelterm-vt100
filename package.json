@@ -15,16 +15,22 @@
       "svelte": "./src/TerminalView.svelte",
       "default": "./src/TerminalView.svelte"
     },
-    "./EmbeddedTerminal": {
-      "types": "./src/EmbeddedTerminal.svelte",
-      "svelte": "./src/EmbeddedTerminal.svelte",
-      "default": "./src/EmbeddedTerminal.svelte"
+    "./EmbeddedTerminalDom": {
+      "types": "./src/EmbeddedTerminalDom.svelte",
+      "svelte": "./src/EmbeddedTerminalDom.svelte",
+      "default": "./src/EmbeddedTerminalDom.svelte"
+    },
+    "./EmbeddedTerminalRegion": {
+      "types": "./src/EmbeddedTerminalRegion.svelte",
+      "svelte": "./src/EmbeddedTerminalRegion.svelte",
+      "default": "./src/EmbeddedTerminalRegion.svelte"
     }
   },
   "files": [
     "dist/src",
     "src/TerminalView.svelte",
-    "src/EmbeddedTerminal.svelte",
+    "src/EmbeddedTerminalDom.svelte",
+    "src/EmbeddedTerminalRegion.svelte",
     "README.md",
     "LICENSE"
   ],
