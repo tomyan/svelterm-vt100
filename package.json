@@ -14,11 +14,17 @@
       "types": "./src/TerminalView.svelte",
       "svelte": "./src/TerminalView.svelte",
       "default": "./src/TerminalView.svelte"
+    },
+    "./EmbeddedTerminal": {
+      "types": "./src/EmbeddedTerminal.svelte",
+      "svelte": "./src/EmbeddedTerminal.svelte",
+      "default": "./src/EmbeddedTerminal.svelte"
     }
   },
   "files": [
     "dist/src",
     "src/TerminalView.svelte",
+    "src/EmbeddedTerminal.svelte",
     "README.md",
     "LICENSE"
   ],
