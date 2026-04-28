@@ -44,6 +44,9 @@ export class Terminal {
     backgroundColor = '#0d1117'
 
     constructor(cols: number, rows: number) {
+        if (cols <= 0 || rows <= 0) {
+            throw new Error(`Terminal requires positive dimensions, got ${cols}x${rows}`)
+        }
         this.cols = cols
         this.rows = rows
         this.grid = new Grid(cols, rows)
@@ -96,6 +99,9 @@ export class Terminal {
     }
 
     resize(newCols: number, newRows: number): void {
+        if (newCols <= 0 || newRows <= 0) {
+            throw new Error(`Terminal.resize requires positive dimensions, got ${newCols}x${newRows}`)
+        }
         this.grid = this.grid.resize(newCols, newRows)
         this.cols = newCols
         this.rows = newRows

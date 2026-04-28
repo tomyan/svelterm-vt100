@@ -5,7 +5,7 @@ export type Color =
 
 export const DEFAULT_COLOR: Color = { type: 'default' }
 
-export const enum Attr {
+export enum Attr {
     None        = 0,
     Bold        = 1 << 0,
     Dim         = 1 << 1,
