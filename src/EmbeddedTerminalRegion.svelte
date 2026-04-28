@@ -21,8 +21,22 @@
     onMount(() => {
         const unsubOutput = stream.onOutput((bytes) => terminal.write(bytes))
         stream.resize(cols, rows)
+
+        // Register an input sink so the host iframe (or whoever drives
+        // the outer terminal) can forward typed keystrokes and mouse
+        // events straight to the embedded shell. The host calls
+        // globalThis.__svtTerminalInputSink(seq) with already-translated
+        // ANSI byte sequences (Enter -> "\r", arrow keys -> CSI sequences,
+        // SGR mouse reports, etc.) and we shovel them at the stream.
+        const encoder = new TextEncoder()
+        const previousSink = (globalThis as any).__svtTerminalInputSink
+        ;(globalThis as any).__svtTerminalInputSink = (data: string) => {
+            stream.write(encoder.encode(data))
+        }
+
         return () => {
             unsubOutput()
+            ;(globalThis as any).__svtTerminalInputSink = previousSink
         }
     })
 
