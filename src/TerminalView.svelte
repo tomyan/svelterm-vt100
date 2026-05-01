@@ -116,7 +116,8 @@
 
     const cursor = $derived.by(() => {
         void changeMarker
-        return terminal.cursor
+        const c = terminal.cursor
+        return { col: c.col, row: c.row, visible: c.visible }
     })
 
     interface CellRender {

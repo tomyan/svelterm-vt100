@@ -20,7 +20,13 @@
 
     onMount(() => {
         const unsubOutput = stream.onOutput((bytes) => terminal.write(bytes))
-        stream.resize(cols, rows)
+        // Don't seed stream.resize from prop defaults here — the region's
+        // first paint already fires a layout-driven resize with the real
+        // allocated cell grid (via SvtRegionNode.notifyAllocatedSize ->
+        // handleRegionResize). svelterm's paint microtask runs BEFORE
+        // Svelte's onMount, so seeding here would clobber the correct size
+        // with the 80×24 prop default and the embedded kernel would see
+        // the wrong dimensions until something else triggered a resize.
 
         // Register an input sink so the host iframe (or whoever drives
         // the outer terminal) can forward typed keystrokes and mouse
@@ -45,13 +51,23 @@
         region.setCellSource((col: number, row: number) =>
             cellToSvelterm(terminal.getCell(col, row))
         )
+        // Mirror the embedded terminal's cursor onto the region so the
+        // outer terminal can position + show it after each repaint.
+        // Otherwise the user can't see where typed bytes will land.
+        const syncCursor = () => {
+            const c = terminal.cursor
+            region.setCursor({ col: c.col, row: c.row, visible: c.visible })
+        }
+        syncCursor()
         const previous = terminal.onChange
         terminal.onChange = () => {
+            syncCursor()
             region.markDirty()
             previous?.()
         }
         return () => {
             terminal.onChange = previous
+            region.setCursor(null)
         }
     })
 
@@ -81,20 +97,19 @@
         underline: boolean
         strikethrough: boolean
         dim: boolean
+        inverse: boolean
         hyperlink?: string
     } {
-        const isInverse = (cell.attrs & Attr.Inverse) !== 0
-        const fgColor = isInverse ? cell.bg : cell.fg
-        const bgColor = isInverse ? cell.fg : cell.bg
         return {
             char: cell.char,
-            fg: colorToString(fgColor),
-            bg: colorToString(bgColor),
+            fg: colorToString(cell.fg),
+            bg: colorToString(cell.bg),
             bold: (cell.attrs & Attr.Bold) !== 0,
             italic: (cell.attrs & Attr.Italic) !== 0,
             underline: (cell.attrs & Attr.Underline) !== 0,
             strikethrough: (cell.attrs & Attr.Strikethrough) !== 0,
-            dim: (cell.attrs & Attr.Dim) !== 0 && !isInverse,
+            dim: (cell.attrs & Attr.Dim) !== 0,
+            inverse: (cell.attrs & Attr.Inverse) !== 0,
             hyperlink: cell.hyperlink,
         }
     }
