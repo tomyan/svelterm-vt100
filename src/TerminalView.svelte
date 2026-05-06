@@ -28,6 +28,16 @@
     // capture `version` as a dep of whatever reactive scope is calling
     // `terminal.write` — and the same handler's write would then re-fire
     // that caller, causing an infinite loop.
+    //
+    // The write is deferred via setTimeout(0) so it lands in a fresh task,
+    // outside any Svelte microtask flush in progress. When `terminal.write`
+    // is driven by a customRenderer mount (svelterm pumps ANSI through
+    // `io.write` → outer `terminal.write` from inside its render), a
+    // microtask-scheduled host-graph write piggybacks on the customRenderer's
+    // batch flush and the host's deriveds end up stuck DIRTY|WAS_MARKED with
+    // the consumer effect never scheduled — the DOM then stops updating
+    // entirely. queueMicrotask isn't enough; the write must clear the entire
+    // task before re-entering host reactivity.
     let changeMarker = $state({})
     let charWidth = $state(0)
     let container: HTMLElement | undefined = $state()
@@ -55,9 +65,15 @@
         charWidth = measureCharWidth(fontFamily, fontSize)
 
         const previous = terminal.onChange
+        let pending = false
         terminal.onChange = () => {
-            changeMarker = {}
             previous?.()
+            if (pending) return
+            pending = true
+            setTimeout(() => {
+                pending = false
+                changeMarker = {}
+            }, 0)
         }
         return () => {
             terminal.onChange = previous
